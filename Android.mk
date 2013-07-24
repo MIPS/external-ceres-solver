@@ -54,16 +54,22 @@ LOCAL_SRC_FILES := internal/ceres/array_utils.cc \
                    internal/ceres/implicit_schur_complement.cc \
                    internal/ceres/iterative_schur_complement_solver.cc \
                    internal/ceres/levenberg_marquardt_strategy.cc \
+                   internal/ceres/line_search.cc \
+                   internal/ceres/line_search_direction.cc \
+                   internal/ceres/line_search_minimizer.cc \
                    internal/ceres/linear_least_squares_problems.cc \
                    internal/ceres/linear_operator.cc \
                    internal/ceres/linear_solver.cc \
                    internal/ceres/local_parameterization.cc \
                    internal/ceres/loss_function.cc \
+                   internal/ceres/low_rank_inverse_hessian.cc \
                    internal/ceres/miniglog/glog/logging.cc \
+                   internal/ceres/minimizer.cc \
                    internal/ceres/normal_prior.cc \
                    internal/ceres/parameter_block_ordering.cc \
                    internal/ceres/partitioned_matrix_view.cc \
-                   internal/ceres/polynomial_solver.cc \
+                   internal/ceres/polynomial.cc \
+                   internal/ceres/preconditioner.cc \
                    internal/ceres/problem.cc \
                    internal/ceres/problem_impl.cc \
                    internal/ceres/program.cc \
@@ -72,6 +78,7 @@ LOCAL_SRC_FILES := internal/ceres/array_utils.cc \
                    internal/ceres/runtime_numeric_diff_cost_function.cc \
                    internal/ceres/schur_complement_solver.cc \
                    internal/ceres/schur_eliminator.cc \
+                   internal/ceres/schur_jacobi_preconditioner.cc \
                    internal/ceres/scratch_evaluate_preparer.cc \
                    internal/ceres/solver.cc \
                    internal/ceres/solver_impl.cc \

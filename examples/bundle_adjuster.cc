@@ -60,7 +60,6 @@
 
 #include "bal_problem.h"
 #include "ceres/ceres.h"
-#include "ceres/random.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 #include "snavely_reprojection_error.h"
@@ -97,9 +96,6 @@ DEFINE_double(eta, 1e-2, "Default value for eta. Eta determines the "
              "accuracy of each linear solve of the truncated newton step. "
              "Changing this parameter can affect solve performance.");
 
-DEFINE_bool(use_block_amd, true, "Use a block oriented fill reducing "
-            "ordering.");
-
 DEFINE_int32(num_threads, 1, "Number of threads.");
 DEFINE_int32(num_iterations, 5, "Number of iterations.");
 DEFINE_double(max_solver_time, 1e32, "Maximum solve time in seconds.");
@@ -116,6 +112,8 @@ DEFINE_int32(random_seed, 38401, "Random seed used to set the state "
              "of the pseudo random number generator used to generate "
              "the pertubations.");
 DEFINE_string(solver_log, "", "File to record the solver execution to.");
+DEFINE_bool(line_search, false, "Use a line search instead of trust region "
+            "algorithm.");
 
 namespace ceres {
 namespace examples {
@@ -139,8 +137,6 @@ void SetOrdering(BALProblem* bal_problem, Solver::Options* options) {
   const int num_cameras = bal_problem->num_cameras();
   const int camera_block_size = bal_problem->camera_block_size();
   double* cameras = bal_problem->mutable_cameras();
-
-  options->use_block_amd = FLAGS_use_block_amd;
 
   if (options->use_inner_iterations) {
     if (FLAGS_blocks_for_inner_iterations == "cameras") {
@@ -225,6 +221,10 @@ void SetMinimizerOptions(Solver::Options* options) {
   options->eta = FLAGS_eta;
   options->max_solver_time_in_seconds = FLAGS_max_solver_time;
   options->use_nonmonotonic_steps = FLAGS_nonmonotonic_steps;
+  if (FLAGS_line_search) {
+    options->minimizer_type = ceres::LINE_SEARCH;
+  }
+
   CHECK(StringToTrustRegionStrategyType(FLAGS_trust_region_strategy,
                                         &options->trust_region_strategy_type));
   CHECK(StringToDoglegType(FLAGS_dogleg, &options->dogleg_type));
@@ -305,7 +305,7 @@ void SolveProblem(const char* filename) {
   BALProblem bal_problem(filename, FLAGS_use_quaternions);
   Problem problem;
 
-  SetRandomState(FLAGS_random_seed);
+  srand(FLAGS_random_seed);
   bal_problem.Normalize();
   bal_problem.Perturb(FLAGS_rotation_sigma,
                       FLAGS_translation_sigma,

@@ -58,6 +58,22 @@ class Solver {
   struct Options {
     // Default constructor that sets up a generic sparse problem.
     Options() {
+      minimizer_type = TRUST_REGION;
+      line_search_direction_type = LBFGS;
+      line_search_type = WOLFE;
+      nonlinear_conjugate_gradient_type = FLETCHER_REEVES;
+      max_lbfgs_rank = 20;
+      use_approximate_eigenvalue_bfgs_scaling = false;
+      line_search_interpolation_type = CUBIC;
+      min_line_search_step_size = 1e-9;
+      line_search_sufficient_function_decrease = 1e-4;
+      max_line_search_step_contraction = 1e-3;
+      min_line_search_step_contraction = 0.6;
+      max_num_line_search_step_size_iterations = 20;
+      max_num_line_search_direction_restarts = 5;
+      line_search_sufficient_curvature_decrease = 0.9;
+      max_line_search_step_expansion = 10.0;
+
       trust_region_strategy_type = LEVENBERG_MARQUARDT;
       dogleg_type = TRADITIONAL_DOGLEG;
       use_nonmonotonic_steps = false;
@@ -69,8 +85,8 @@ class Solver {
       max_trust_region_radius = 1e16;
       min_trust_region_radius = 1e-32;
       min_relative_decrease = 1e-3;
-      lm_min_diagonal = 1e-6;
-      lm_max_diagonal = 1e32;
+      min_lm_diagonal = 1e-6;
+      max_lm_diagonal = 1e32;
       max_num_consecutive_invalid_steps = 5;
       function_tolerance = 1e-6;
       gradient_tolerance = 1e-10;
@@ -90,29 +106,19 @@ class Solver {
 #endif
 
       num_linear_solver_threads = 1;
-
-#if defined(CERES_NO_SUITESPARSE)
-      use_block_amd = false;
-#else
-      use_block_amd = true;
-#endif
       linear_solver_ordering = NULL;
-      use_inner_iterations = false;
-      inner_iteration_ordering = NULL;
-      linear_solver_min_num_iterations = 1;
-      linear_solver_max_num_iterations = 500;
+      use_postordering = false;
+      min_linear_solver_iterations = 1;
+      max_linear_solver_iterations = 500;
       eta = 1e-1;
       jacobi_scaling = true;
+      use_inner_iterations = false;
+      inner_iteration_tolerance = 1e-3;
+      inner_iteration_ordering = NULL;
       logging_type = PER_MINIMIZER_ITERATION;
       minimizer_progress_to_stdout = false;
-      return_initial_residuals = false;
-      return_initial_gradient = false;
-      return_initial_jacobian = false;
-      return_final_residuals = false;
-      return_final_gradient = false;
-      return_final_jacobian = false;
-      lsqp_dump_directory = "/tmp";
-      lsqp_dump_format_type = TEXTFILE;
+      trust_region_problem_dump_directory = "/tmp";
+      trust_region_problem_dump_format_type = TEXTFILE;
       check_gradients = false;
       gradient_check_relative_precision = 1e-8;
       numeric_derivative_relative_step_size = 1e-6;
@@ -121,6 +127,164 @@ class Solver {
 
     ~Options();
     // Minimizer options ----------------------------------------
+
+    // Ceres supports the two major families of optimization strategies -
+    // Trust Region and Line Search.
+    //
+    // 1. The line search approach first finds a descent direction
+    // along which the objective function will be reduced and then
+    // computes a step size that decides how far should move along
+    // that direction. The descent direction can be computed by
+    // various methods, such as gradient descent, Newton's method and
+    // Quasi-Newton method. The step size can be determined either
+    // exactly or inexactly.
+    //
+    // 2. The trust region approach approximates the objective
+    // function using using a model function (often a quadratic) over
+    // a subset of the search space known as the trust region. If the
+    // model function succeeds in minimizing the true objective
+    // function the trust region is expanded; conversely, otherwise it
+    // is contracted and the model optimization problem is solved
+    // again.
+    //
+    // Trust region methods are in some sense dual to line search methods:
+    // trust region methods first choose a step size (the size of the
+    // trust region) and then a step direction while line search methods
+    // first choose a step direction and then a step size.
+    MinimizerType minimizer_type;
+
+    LineSearchDirectionType line_search_direction_type;
+    LineSearchType line_search_type;
+    NonlinearConjugateGradientType nonlinear_conjugate_gradient_type;
+
+    // The LBFGS hessian approximation is a low rank approximation to
+    // the inverse of the Hessian matrix. The rank of the
+    // approximation determines (linearly) the space and time
+    // complexity of using the approximation. Higher the rank, the
+    // better is the quality of the approximation. The increase in
+    // quality is however is bounded for a number of reasons.
+    //
+    // 1. The method only uses secant information and not actual
+    // derivatives.
+    //
+    // 2. The Hessian approximation is constrained to be positive
+    // definite.
+    //
+    // So increasing this rank to a large number will cost time and
+    // space complexity without the corresponding increase in solution
+    // quality. There are no hard and fast rules for choosing the
+    // maximum rank. The best choice usually requires some problem
+    // specific experimentation.
+    //
+    // For more theoretical and implementation details of the LBFGS
+    // method, please see:
+    //
+    // Nocedal, J. (1980). "Updating Quasi-Newton Matrices with
+    // Limited Storage". Mathematics of Computation 35 (151): 773–782.
+    int max_lbfgs_rank;
+
+    // As part of the (L)BFGS update step (BFGS) / right-multiply step (L-BFGS),
+    // the initial inverse Hessian approximation is taken to be the Identity.
+    // However, Oren showed that using instead I * \gamma, where \gamma is
+    // chosen to approximate an eigenvalue of the true inverse Hessian can
+    // result in improved convergence in a wide variety of cases. Setting
+    // use_approximate_eigenvalue_bfgs_scaling to true enables this scaling.
+    //
+    // It is important to note that approximate eigenvalue scaling does not
+    // always improve convergence, and that it can in fact significantly degrade
+    // performance for certain classes of problem, which is why it is disabled
+    // by default.  In particular it can degrade performance when the
+    // sensitivity of the problem to different parameters varies significantly,
+    // as in this case a single scalar factor fails to capture this variation
+    // and detrimentally downscales parts of the jacobian approximation which
+    // correspond to low-sensitivity parameters. It can also reduce the
+    // robustness of the solution to errors in the jacobians.
+    //
+    // Oren S.S., Self-scaling variable metric (SSVM) algorithms
+    // Part II: Implementation and experiments, Management Science,
+    // 20(5), 863-874, 1974.
+    bool use_approximate_eigenvalue_bfgs_scaling;
+
+    // Degree of the polynomial used to approximate the objective
+    // function. Valid values are BISECTION, QUADRATIC and CUBIC.
+    //
+    // BISECTION corresponds to pure backtracking search with no
+    // interpolation.
+    LineSearchInterpolationType line_search_interpolation_type;
+
+    // If during the line search, the step_size falls below this
+    // value, it is truncated to zero.
+    double min_line_search_step_size;
+
+    // Line search parameters.
+
+    // Solving the line search problem exactly is computationally
+    // prohibitive. Fortunately, line search based optimization
+    // algorithms can still guarantee convergence if instead of an
+    // exact solution, the line search algorithm returns a solution
+    // which decreases the value of the objective function
+    // sufficiently. More precisely, we are looking for a step_size
+    // s.t.
+    //
+    //   f(step_size) <= f(0) + sufficient_decrease * f'(0) * step_size
+    //
+    double line_search_sufficient_function_decrease;
+
+    // In each iteration of the line search,
+    //
+    //  new_step_size >= max_line_search_step_contraction * step_size
+    //
+    // Note that by definition, for contraction:
+    //
+    //  0 < max_step_contraction < min_step_contraction < 1
+    //
+    double max_line_search_step_contraction;
+
+    // In each iteration of the line search,
+    //
+    //  new_step_size <= min_line_search_step_contraction * step_size
+    //
+    // Note that by definition, for contraction:
+    //
+    //  0 < max_step_contraction < min_step_contraction < 1
+    //
+    double min_line_search_step_contraction;
+
+    // Maximum number of trial step size iterations during each line search,
+    // if a step size satisfying the search conditions cannot be found within
+    // this number of trials, the line search will terminate.
+    int max_num_line_search_step_size_iterations;
+
+    // Maximum number of restarts of the line search direction algorithm before
+    // terminating the optimization. Restarts of the line search direction
+    // algorithm occur when the current algorithm fails to produce a new descent
+    // direction. This typically indicates a numerical failure, or a breakdown
+    // in the validity of the approximations used.
+    int max_num_line_search_direction_restarts;
+
+    // The strong Wolfe conditions consist of the Armijo sufficient
+    // decrease condition, and an additional requirement that the
+    // step-size be chosen s.t. the _magnitude_ ('strong' Wolfe
+    // conditions) of the gradient along the search direction
+    // decreases sufficiently. Precisely, this second condition
+    // is that we seek a step_size s.t.
+    //
+    //   |f'(step_size)| <= sufficient_curvature_decrease * |f'(0)|
+    //
+    // Where f() is the line search objective and f'() is the derivative
+    // of f w.r.t step_size (d f / d step_size).
+    double line_search_sufficient_curvature_decrease;
+
+    // During the bracketing phase of the Wolfe search, the step size is
+    // increased until either a point satisfying the Wolfe conditions is
+    // found, or an upper bound for a bracket containing a point satisfying
+    // the conditions is found.  Precisely, at each iteration of the
+    // expansion:
+    //
+    //   new_step_size <= max_step_expansion * step_size.
+    //
+    // By definition for expansion, max_step_expansion > 1.0.
+    double max_line_search_step_expansion;
 
     TrustRegionStrategyType trust_region_strategy_type;
 
@@ -181,11 +345,11 @@ class Solver {
     // the normal equations J'J is used to control the size of the
     // trust region. Extremely small and large values along the
     // diagonal can make this regularization scheme
-    // fail. lm_max_diagonal and lm_min_diagonal, clamp the values of
+    // fail. max_lm_diagonal and min_lm_diagonal, clamp the values of
     // diag(J'J) from above and below. In the normal course of
     // operation, the user should not have to modify these parameters.
-    double lm_min_diagonal;
-    double lm_max_diagonal;
+    double min_lm_diagonal;
+    double max_lm_diagonal;
 
     // Sometimes due to numerical conditioning problems or linear
     // solver flakiness, the trust region strategy may return a
@@ -302,19 +466,26 @@ class Solver {
     // deallocate the memory when destroyed.
     ParameterBlockOrdering* linear_solver_ordering;
 
-    // By virtue of the modeling layer in Ceres being block oriented,
-    // all the matrices used by Ceres are also block oriented. When
-    // doing sparse direct factorization of these matrices (for
-    // SPARSE_NORMAL_CHOLESKY, SPARSE_SCHUR and ITERATIVE in
-    // conjunction with CLUSTER_TRIDIAGONAL AND CLUSTER_JACOBI
-    // preconditioners), the fill-reducing ordering algorithms can
-    // either be run on the block or the scalar form of these matrices.
-    // Running it on the block form exposes more of the super-nodal
-    // structure of the matrix to the factorization routines. Setting
-    // this parameter to true runs the ordering algorithms in block
-    // form. Currently this option only makes sense with
-    // sparse_linear_algebra_library = SUITE_SPARSE.
-    bool use_block_amd;
+    // Sparse Cholesky factorization algorithms use a fill-reducing
+    // ordering to permute the columns of the Jacobian matrix. There
+    // are two ways of doing this.
+
+    // 1. Compute the Jacobian matrix in some order and then have the
+    //    factorization algorithm permute the columns of the Jacobian.
+
+    // 2. Compute the Jacobian with its columns already permuted.
+
+    // The first option incurs a significant memory penalty. The
+    // factorization algorithm has to make a copy of the permuted
+    // Jacobian matrix, thus Ceres pre-permutes the columns of the
+    // Jacobian matrix and generally speaking, there is no performance
+    // penalty for doing so.
+
+    // In some rare cases, it is worth using a more complicated
+    // reordering algorithm which has slightly better runtime
+    // performance at the expense of an extra copy of the Jacobian
+    // matrix. Setting use_postordering to true enables this tradeoff.
+    bool use_postordering;
 
     // Some non-linear least squares problems have additional
     // structure in the way the parameter blocks interact that it is
@@ -384,18 +555,30 @@ class Solver {
     //
     // 2. Specify a collection of of ordered independent sets. Where
     //    the lower numbered groups are optimized before the higher
-    //    number groups. Each group must be an independent set.
+    //    number groups. Each group must be an independent set. Not
+    //    all parameter blocks need to be present in the ordering.
     ParameterBlockOrdering* inner_iteration_ordering;
+
+    // Generally speaking, inner iterations make significant progress
+    // in the early stages of the solve and then their contribution
+    // drops down sharply, at which point the time spent doing inner
+    // iterations is not worth it.
+    //
+    // Once the relative decrease in the objective function due to
+    // inner iterations drops below inner_iteration_tolerance, the use
+    // of inner iterations in subsequent trust region minimizer
+    // iterations is disabled.
+    double inner_iteration_tolerance;
 
     // Minimum number of iterations for which the linear solver should
     // run, even if the convergence criterion is satisfied.
-    int linear_solver_min_num_iterations;
+    int min_linear_solver_iterations;
 
     // Maximum number of iterations for which the linear solver should
     // run. If the solver does not converge in less than
-    // linear_solver_max_num_iterations, then it returns
-    // MAX_ITERATIONS, as its termination type.
-    int linear_solver_max_num_iterations;
+    // max_linear_solver_iterations, then it returns MAX_ITERATIONS,
+    // as its termination type.
+    int max_linear_solver_iterations;
 
     // Forcing sequence parameter. The truncated Newton solver uses
     // this number to control the relative accuracy with which the
@@ -421,22 +604,17 @@ class Solver {
     // is sent to STDOUT.
     bool minimizer_progress_to_stdout;
 
-    bool return_initial_residuals;
-    bool return_initial_gradient;
-    bool return_initial_jacobian;
+    // List of iterations at which the minimizer should dump the trust
+    // region problem. Useful for testing and benchmarking. If empty
+    // (default), no problems are dumped.
+    vector<int> trust_region_minimizer_iterations_to_dump;
 
-    bool return_final_residuals;
-    bool return_final_gradient;
-    bool return_final_jacobian;
-
-    // List of iterations at which the optimizer should dump the
-    // linear least squares problem to disk. Useful for testing and
-    // benchmarking. If empty (default), no problems are dumped.
-    //
-    // This is ignored if protocol buffers are disabled.
-    vector<int> lsqp_iterations_to_dump;
-    string lsqp_dump_directory;
-    DumpFormatType lsqp_dump_format_type;
+    // Directory to which the problems should be written to. Should be
+    // non-empty if trust_region_minimizer_iterations_to_dump is
+    // non-empty and trust_region_problem_dump_format_type is not
+    // CONSOLE.
+    string trust_region_problem_dump_directory;
+    DumpFormatType trust_region_problem_dump_format_type;
 
     // Finite differences options ----------------------------------------------
 
@@ -518,6 +696,8 @@ class Solver {
     string FullReport() const;
 
     // Minimizer summary -------------------------------------------------
+    MinimizerType minimizer_type;
+
     SolverTerminationType termination_type;
 
     // If the solver did not run, or there was a failure, a
@@ -534,58 +714,13 @@ class Solver {
     // blocks that they depend on were fixed.
     double fixed_cost;
 
-    // Vectors of residuals before and after the optimization. The
-    // entries of these vectors are in the order in which
-    // ResidualBlocks were added to the Problem object.
-    //
-    // Whether the residual vectors are populated with values is
-    // controlled by Solver::Options::return_initial_residuals and
-    // Solver::Options::return_final_residuals respectively.
-    vector<double> initial_residuals;
-    vector<double> final_residuals;
-
-    // Gradient vectors, before and after the optimization.  The rows
-    // are in the same order in which the ParameterBlocks were added
-    // to the Problem object.
-    //
-    // NOTE: Since AddResidualBlock adds ParameterBlocks to the
-    // Problem automatically if they do not already exist, if you wish
-    // to have explicit control over the ordering of the vectors, then
-    // use Problem::AddParameterBlock to explicitly add the
-    // ParameterBlocks in the order desired.
-    //
-    // Whether the vectors are populated with values is controlled by
-    // Solver::Options::return_initial_gradient and
-    // Solver::Options::return_final_gradient respectively.
-    vector<double> initial_gradient;
-    vector<double> final_gradient;
-
-    // Jacobian matrices before and after the optimization. The rows
-    // of these matrices are in the same order in which the
-    // ResidualBlocks were added to the Problem object. The columns
-    // are in the same order in which the ParameterBlocks were added
-    // to the Problem object.
-    //
-    // NOTE: Since AddResidualBlock adds ParameterBlocks to the
-    // Problem automatically if they do not already exist, if you wish
-    // to have explicit control over the column ordering of the
-    // matrix, then use Problem::AddParameterBlock to explicitly add
-    // the ParameterBlocks in the order desired.
-    //
-    // The Jacobian matrices are stored as compressed row sparse
-    // matrices. Please see ceres/crs_matrix.h for more details of the
-    // format.
-    //
-    // Whether the Jacboan matrices are populated with values is
-    // controlled by Solver::Options::return_initial_jacobian and
-    // Solver::Options::return_final_jacobian respectively.
-    CRSMatrix initial_jacobian;
-    CRSMatrix final_jacobian;
-
     vector<IterationSummary> iterations;
 
     int num_successful_steps;
     int num_unsuccessful_steps;
+    int num_inner_iteration_steps;
+
+    // All times reported below are wall times.
 
     // When the user calls Solve, before the actual optimization
     // occurs, Ceres performs a number of preprocessing steps. These
@@ -604,14 +739,21 @@ class Solver {
     // Some total of all time spent inside Ceres when Solve is called.
     double total_time_in_seconds;
 
+    double linear_solver_time_in_seconds;
+    double residual_evaluation_time_in_seconds;
+    double jacobian_evaluation_time_in_seconds;
+    double inner_iteration_time_in_seconds;
+
     // Preprocessor summary.
     int num_parameter_blocks;
     int num_parameters;
+    int num_effective_parameters;
     int num_residual_blocks;
     int num_residuals;
 
     int num_parameter_blocks_reduced;
     int num_parameters_reduced;
+    int num_effective_parameters_reduced;
     int num_residual_blocks_reduced;
     int num_residuals_reduced;
 
@@ -627,11 +769,28 @@ class Solver {
     LinearSolverType linear_solver_type_given;
     LinearSolverType linear_solver_type_used;
 
+    vector<int> linear_solver_ordering_given;
+    vector<int> linear_solver_ordering_used;
+
+    bool inner_iterations_given;
+    bool inner_iterations_used;
+
+    vector<int> inner_iteration_ordering_given;
+    vector<int> inner_iteration_ordering_used;
+
     PreconditionerType preconditioner_type;
 
     TrustRegionStrategyType trust_region_strategy_type;
     DoglegType dogleg_type;
+
     SparseLinearAlgebraLibraryType sparse_linear_algebra_library;
+
+    LineSearchDirectionType line_search_direction_type;
+    LineSearchType line_search_type;
+    LineSearchInterpolationType line_search_interpolation_type;
+    NonlinearConjugateGradientType nonlinear_conjugate_gradient_type;
+
+    int max_lbfgs_rank;
   };
 
   // Once a least squares problem has been built, this function takes

@@ -29,6 +29,7 @@
 # Author: keir@google.com (Keir Mierle)
 
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.0)
+CMAKE_POLICY(VERSION 2.8)
 
 IF (COMMAND cmake_policy)
   CMAKE_POLICY(SET CMP0003 NEW)
@@ -43,7 +44,7 @@ IF (EXISTS ${CMAKE_SOURCE_DIR}/.git)
   # Git Bash (shipped with msysgit)
   SET (LOCAL_GIT_DIRECTORY ${CMAKE_SOURCE_DIR}/.git)
 ELSE (EXISTS ${CMAKE_SOURCE_DIR}/.git)
-  # TODO(keir) Add proper windows support
+  # TODO(keir) Add proper Windows support
 ENDIF (EXISTS ${CMAKE_SOURCE_DIR}/.git)
 
 IF (EXISTS ${LOCAL_GIT_DIRECTORY})
@@ -73,8 +74,12 @@ SET(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 #
 # For versions without ABI changes, bump the smallest number in CERES_VERSION,
 # but leave the CERES_ABI_VERSION unchanged.
-SET(CERES_VERSION 1.4.0)
-SET(CERES_ABI_VERSION 1.4.0)
+SET(CERES_VERSION_MAJOR 1)
+SET(CERES_VERSION_MINOR 7)
+SET(CERES_VERSION_PATCH 0)
+SET(CERES_VERSION
+    ${CERES_VERSION_MAJOR}.${CERES_VERSION_MINOR}.${CERES_VERSION_PATCH})
+SET(CERES_ABI_VERSION 1.7.0)
 
 ENABLE_TESTING()
 
@@ -85,6 +90,10 @@ OPTION(BUILD_TESTING
 OPTION(BUILD_ANDROID
        "Build for Android. Use build_android.sh instead of setting this."
        OFF)
+
+OPTION(BUILD_SHARED
+       "Build a dynamically linkable version of Ceres Solver."
+       ON)
 
 # To get a more static build, try the following line on Mac and Linux:
 # SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
@@ -122,10 +131,10 @@ SET(CXSPARSE_SEARCH_LIBS ${SEARCH_LIBS})
 SET(CXSPARSE_SEARCH_HEADERS ${SEARCH_HEADERS})
 LIST(APPEND CXSPARSE_SEARCH_HEADERS /usr/include/suitesparse) # Ubuntu
 
+IF ((NOT DEFINED SUITESPARSE) OR (DEFINED SUITESPARSE AND SUITESPARSE))
 # Check for SuiteSparse dependencies
-MESSAGE("-- Check for AMD")
-SET(AMD_FOUND TRUE)
 
+SET(AMD_FOUND TRUE)
 FIND_LIBRARY(AMD_LIB NAMES amd PATHS ${SUITESPARSE_SEARCH_LIBS})
 IF (EXISTS ${AMD_LIB})
   MESSAGE("-- Found AMD library: ${AMD_LIB}")
@@ -142,9 +151,7 @@ ELSE (EXISTS ${AMD_INCLUDE})
   SET(AMD_FOUND FALSE)
 ENDIF (EXISTS ${AMD_INCLUDE})
 
-MESSAGE("-- Check for CAMD")
 SET(CAMD_FOUND TRUE)
-
 FIND_LIBRARY(CAMD_LIB NAMES camd PATHS ${SUITESPARSE_SEARCH_LIBS})
 IF (EXISTS ${CAMD_LIB})
   MESSAGE("-- Found CAMD library: ${CAMD_LIB}")
@@ -161,9 +168,7 @@ ELSE (EXISTS ${CAMD_INCLUDE})
   SET(CAMD_FOUND FALSE)
 ENDIF (EXISTS ${CAMD_INCLUDE})
 
-MESSAGE("-- Check for COLAMD")
 SET(COLAMD_FOUND TRUE)
-
 FIND_LIBRARY(COLAMD_LIB NAMES colamd PATHS ${SUITESPARSE_SEARCH_LIBS})
 IF (EXISTS ${COLAMD_LIB})
   MESSAGE("-- Found COLAMD library: ${COLAMD_LIB}")
@@ -180,9 +185,7 @@ ELSE (EXISTS ${COLAMD_INCLUDE})
   SET(COLAMD_FOUND FALSE)
 ENDIF (EXISTS ${COLAMD_INCLUDE})
 
-MESSAGE("-- Check for CCOLAMD")
 SET(CCOLAMD_FOUND TRUE)
-
 FIND_LIBRARY(CCOLAMD_LIB NAMES ccolamd PATHS ${SUITESPARSE_SEARCH_LIBS})
 IF (EXISTS ${CCOLAMD_LIB})
   MESSAGE("-- Found CCOLAMD library: ${CCOLAMD_LIB}")
@@ -199,9 +202,7 @@ ELSE (EXISTS ${CCOLAMD_INCLUDE})
   SET(CCOLAMD_FOUND FALSE)
 ENDIF (EXISTS ${CCOLAMD_INCLUDE})
 
-MESSAGE("-- Check for CHOLMOD")
 SET(CHOLMOD_FOUND TRUE)
-
 FIND_LIBRARY(CHOLMOD_LIB NAMES cholmod PATHS ${SUITESPARSE_SEARCH_LIBS})
 IF (EXISTS ${CHOLMOD_LIB})
   MESSAGE("-- Found CHOLMOD library: ${CHOLMOD_LIB}")
@@ -218,10 +219,27 @@ ELSE (EXISTS ${CHOLMOD_INCLUDE})
   SET(CHOLMOD_FOUND FALSE)
 ENDIF (EXISTS ${CHOLMOD_INCLUDE})
 
+SET(SUITESPARSEQR_FOUND TRUE)
+FIND_LIBRARY(SUITESPARSEQR_LIB NAMES spqr PATHS ${SUITESPARSE_SEARCH_LIBS})
+IF (EXISTS ${SUITESPARSEQR_LIB})
+  MESSAGE("-- Found SUITESPARSEQR library: ${SUITESPARSEQR_LIB}")
+ELSE (EXISTS ${SUITESPARSEQR_LIB})
+  MESSAGE("-- Did not find SUITESPARSEQR library")
+  SET(SUITESPARSEQR_FOUND FALSE)
+ENDIF (EXISTS ${SUITESPARSEQR_LIB})
+
+FIND_PATH(SUITESPARSEQR_INCLUDE NAMES SuiteSparseQR.hpp PATHS ${SUITESPARSE_SEARCH_HEADERS})
+IF (EXISTS ${SUITESPARSEQR_INCLUDE})
+  MESSAGE("-- Found SUITESPARSEQR header in: ${SUITESPARSEQR_INCLUDE}")
+ELSE (EXISTS ${SUITESPARSEQR_INCLUDE})
+  MESSAGE("-- Did not find SUITESPARSEQR header")
+  SET(SUITESPARSEQR_FOUND FALSE)
+ENDIF (EXISTS ${SUITESPARSEQR_INCLUDE})
+
 # If SuiteSparse version is >= 4 then SuiteSparse_config is required.
 # For SuiteSparse 3, UFconfig.h is required.
-MESSAGE("-- Check for SuiteSparse_config (SuiteSparse v4)")
 SET(SUITESPARSE_CONFIG_FOUND TRUE)
+SET(UFCONFIG_FOUND TRUE)
 
 FIND_LIBRARY(SUITESPARSE_CONFIG_LIB
              NAMES suitesparseconfig
@@ -237,43 +255,56 @@ FIND_PATH(SUITESPARSE_CONFIG_INCLUDE
           PATHS ${SUITESPARSE_SEARCH_HEADERS})
 IF (EXISTS ${SUITESPARSE_CONFIG_INCLUDE})
   MESSAGE("-- Found SuiteSparse_config header in: ${SUITESPARSE_CONFIG_INCLUDE}")
+  SET(UFCONFIG_FOUND FALSE)
 ELSE (EXISTS ${SUITESPARSE_CONFIG_INCLUDE})
   MESSAGE("-- Did not find SuiteSparse_config header")
 ENDIF (EXISTS ${SUITESPARSE_CONFIG_INCLUDE})
 
 IF (NOT EXISTS ${SUITESPARSE_CONFIG_LIB} OR NOT EXISTS ${SUITESPARSE_CONFIG_INCLUDE})
   SET(SUITESPARSE_CONFIG_FOUND FALSE)
+  FIND_PATH(UFCONFIG_INCLUDE
+            NAMES UFconfig.h
+            PATHS ${SUITESPARSE_SEARCH_HEADERS})
+  IF (EXISTS ${UFCONFIG_INCLUDE})
+    MESSAGE("-- Found UFconfig header in: ${UFCONFIG_INCLUDE}")
+  ELSE (EXISTS ${UFCONFIG_INCLUDE})
+    MESSAGE("-- Did not find UFconfig header")
+    SET(UFCONFIG_FOUND FALSE)
+  ENDIF (EXISTS ${UFCONFIG_INCLUDE})
 ENDIF (NOT EXISTS ${SUITESPARSE_CONFIG_LIB} OR NOT EXISTS ${SUITESPARSE_CONFIG_INCLUDE})
 
-MESSAGE("-- Check for UFconfig (SuiteSparse v3)")
-SET(UFCONFIG_FOUND TRUE)
-
-FIND_PATH(UFCONFIG_INCLUDE
-          NAMES UFconfig.h
-          PATHS ${SUITESPARSE_SEARCH_HEADERS})
-IF (EXISTS ${UFCONFIG_INCLUDE})
-  MESSAGE("-- Found UFconfig header in: ${UFCONFIG_INCLUDE}")
-ELSE (EXISTS ${UFCONFIG_INCLUDE})
-  MESSAGE("-- Did not find UFconfig header")
-  SET(UFCONFIG_FOUND FALSE)
-ENDIF (EXISTS ${UFCONFIG_INCLUDE})
-
-MESSAGE("-- Check for METIS (optional)")
 FIND_LIBRARY(METIS_LIB NAMES metis PATHS ${SUITESPARSE_SEARCH_LIBS})
-
 IF (EXISTS ${METIS_LIB})
   MESSAGE("-- Found METIS library: ${METIS_LIB}")
 ELSE (EXISTS ${METIS_LIB})
   MESSAGE("-- Did not find METIS library")
 ENDIF (EXISTS ${METIS_LIB})
 
+# SuiteSparseQR may be compiled with Intel Threading Building Blocks.
+SET(TBB_FOUND TRUE)
+FIND_LIBRARY(TBB_LIB NAMES tbb PATHS ${SEARCH_LIBS})
+IF (EXISTS ${TBB_LIB})
+  MESSAGE("-- Found TBB library: ${TBB_LIB}")
+ELSE (EXISTS ${TBB_LIB})
+  MESSAGE("-- Did not find TBB library")
+  SET(TBB_FOUND FALSE)
+ENDIF (EXISTS ${TBB_LIB})
+
+FIND_LIBRARY(TBB_MALLOC_LIB NAMES tbbmalloc PATHS ${SEARCH_LIBS})
+IF (EXISTS ${TBB_MALLOC_LIB})
+  MESSAGE("-- Found TBB Malloc library: ${TBB_MALLOC_LIB}")
+ELSE (EXISTS ${TBB_MALLOC_LIB})
+  MESSAGE("-- Did not find TBB library")
+  SET(TBB_FOUND FALSE)
+ENDIF (EXISTS ${TBB_MALLOC_LIB})
+
 SET(BLAS_AND_LAPACK_FOUND TRUE)
-IF (${APPLE})
+IF (APPLE)
   # Mac OS X has LAPACK/BLAS bundled in a framework called
   # "vecLib". Search for that instead of for the normal "lapack"
   # library.
   FIND_LIBRARY(LAPACK_LIB NAMES vecLib)
-ELSE (${APPLE})
+ELSE (APPLE)
   FIND_LIBRARY(BLAS_LIB NAMES blas)
   IF (EXISTS ${BLAS_LIB})
     MESSAGE("-- Found BLAS library: ${BLAS_LIB}")
@@ -282,7 +313,7 @@ ELSE (${APPLE})
     SET(BLAS_AND_LAPACK_FOUND FALSE)
   ENDIF (EXISTS ${BLAS_LIB})
   FIND_LIBRARY(LAPACK_LIB NAMES lapack)
-ENDIF (${APPLE})
+ENDIF (APPLE)
 
 IF (EXISTS ${LAPACK_LIB})
   MESSAGE("-- Found LAPACK library: ${LAPACK_LIB}")
@@ -291,43 +322,57 @@ ELSE (EXISTS ${LAPACK_LIB})
   MESSAGE("-- Did not find LAPACK library")
 ENDIF (EXISTS ${LAPACK_LIB})
 
-SET(SUITESPARSE_FOUND
-    ${AMD_FOUND} AND
+# We don't use SET(SUITESPARSE_FOUND ${AMD_FOUND} ...) in order to
+# be able to check whether SuiteSparse is available withou expanding
+# SUITESPARSE_FOUND with ${}. This means further checks could be:
+#
+#   IF (SUITESPARSE_FOUND)
+#
+# and not:
+#
+#   IF (${SUITESPARSE_FOUND})
+#
+IF (${AMD_FOUND} AND
     ${CAMD_FOUND} AND
     ${COLAMD_FOUND} AND
     ${CCOLAMD_FOUND} AND
     ${CHOLMOD_FOUND} AND
     (${SUITESPARSE_CONFIG_FOUND} OR ${UFCONFIG_FOUND}) AND
     ${BLAS_AND_LAPACK_FOUND})
+  SET(SUITESPARSE_FOUND TRUE)
+ELSE ()
+  SET(SUITESPARSE_FOUND FALSE)
+ENDIF ()
 
+ENDIF ((NOT DEFINED SUITESPARSE) OR (DEFINED SUITESPARSE AND SUITESPARSE))
 # By default, if all of SuiteSparse's dependencies are found, Ceres is
 # built with SuiteSparse support. -DSUITESPARSE=ON/OFF can be used to
 # enable/disable SuiteSparse explicitly.
 IF (DEFINED SUITESPARSE)
-  IF (${SUITESPARSE})
-    IF (NOT ${SUITESPARSE_FOUND})
+  IF (SUITESPARSE)
+    IF (NOT SUITESPARSE_FOUND)
       MESSAGE(FATAL_ERROR "One or more of SuiteSparse's dependencies was not found")
-    ENDIF (NOT ${SUITESPARSE_FOUND})
-  ELSE (${SUITESPARSE})
+    ENDIF (NOT SUITESPARSE_FOUND)
+  ELSE (SUITESPARSE)
     ADD_DEFINITIONS(-DCERES_NO_SUITESPARSE)
-  ENDIF (${SUITESPARSE})
+  ENDIF (SUITESPARSE)
 ELSE (DEFINED SUITESPARSE)
-  IF (${SUITESPARSE_FOUND})
+  IF (SUITESPARSE_FOUND)
     MESSAGE("-- Found all SuiteSparse dependencies. Building with SuiteSparse")
     SET(SUITESPARSE ON)
-  ELSE (${SUITESPARSE_FOUND})
+  ELSE (SUITESPARSE_FOUND)
     MESSAGE("-- Did not find all SuiteSparse dependencies. Building without SuiteSparse")
     SET(SUITESPARSE OFF)
     ADD_DEFINITIONS(-DCERES_NO_SUITESPARSE)
-  ENDIF (${SUITESPARSE_FOUND})
+  ENDIF (SUITESPARSE_FOUND)
 ENDIF (DEFINED SUITESPARSE)
 
 # By default, if all of CXSparse's dependencies are found, Ceres is
 # built with CXSparse support. -DCXSPARSE=ON/OFF can be used to
 # enable/disable CXSparse explicitly.
-MESSAGE("-- Check for CXSparse")
-SET(CXSPARSE_FOUND ON)
+IF ((NOT DEFINED CXSPARSE) OR (DEFINED CXSPARSE AND CXSPARSE))
 
+SET(CXSPARSE_FOUND ON)
 FIND_LIBRARY(CXSPARSE_LIB NAMES cxsparse PATHS ${CXSPARSE_SEARCH_LIBS})
 IF (EXISTS ${CXSPARSE_LIB})
   MESSAGE("-- Found CXSparse library in: ${CXSPARSE_LIB}")
@@ -343,24 +388,25 @@ ELSE (EXISTS ${CXSPARSE_INCLUDE})
   MESSAGE("-- Did not find CXSparse header")
   SET(CXSPARSE_FOUND FALSE)
 ENDIF (EXISTS ${CXSPARSE_INCLUDE})
+ENDIF ((NOT DEFINED CXSPARSE) OR (DEFINED CXSPARSE AND CXSPARSE))
 
 IF (DEFINED CXSPARSE)
-  IF (${CXSPARSE})
-    IF (NOT ${CXSPARSE_FOUND})
+  IF (CXSPARSE)
+    IF (NOT CXSPARSE_FOUND)
       MESSAGE(FATAL_ERROR "-- CXSparse not found.")
-    ENDIF (NOT ${CXSPARSE_FOUND})
-  ELSE (${CXSPARSE})
+    ENDIF (NOT CXSPARSE_FOUND)
+  ELSE (CXSPARSE)
     ADD_DEFINITIONS(-DCERES_NO_CXSPARSE)
-  ENDIF (${CXSPARSE})
+  ENDIF (CXSPARSE)
 ELSE (DEFINED CXSPARSE)
-  IF (${CXSPARSE_FOUND})
+  IF (CXSPARSE_FOUND)
     MESSAGE("-- Building with CXSparse support.")
     SET(CXSPARSE ON)
-  ELSE (${CXSPARSE_FOUND})
+  ELSE (CXSPARSE_FOUND)
     MESSAGE("-- Building without CXSparse.")
     SET(CXSPARSE OFF)
     ADD_DEFINITIONS(-DCERES_NO_CXSPARSE)
-  ENDIF (${CXSPARSE_FOUND})
+  ENDIF (CXSPARSE_FOUND)
 ENDIF (DEFINED CXSPARSE)
 
 # Google Flags
@@ -368,8 +414,7 @@ OPTION(GFLAGS
        "Enable Google Flags."
        ON)
 
-IF (${GFLAGS})
-  MESSAGE("-- Check for Google Flags")
+IF (GFLAGS)
   FIND_LIBRARY(GFLAGS_LIB NAMES gflags PATHS ${SEARCH_LIBS})
   IF (NOT EXISTS ${GFLAGS_LIB})
     MESSAGE(FATAL_ERROR
@@ -384,14 +429,13 @@ IF (${GFLAGS})
             "-DGFLAGS_INCLUDE=...")
   ENDIF (NOT EXISTS ${GFLAGS_INCLUDE})
   MESSAGE("-- Found Google Flags header in: ${GFLAGS_INCLUDE}")
-ELSE (${GFLAGS})
+ELSE (GFLAGS)
   MESSAGE("-- Google Flags disabled; no tests or tools will be built!")
   ADD_DEFINITIONS(-DCERES_NO_GFLAGS)
-ENDIF (${GFLAGS})
+ENDIF (GFLAGS)
 
 # Google Logging
-IF (NOT ${BUILD_ANDROID})
-  MESSAGE("-- Check for Google Log")
+IF (NOT BUILD_ANDROID)
   FIND_LIBRARY(GLOG_LIB NAMES glog PATHS ${SEARCH_LIBS})
   IF (NOT EXISTS ${GLOG_LIB})
     MESSAGE(FATAL_ERROR
@@ -407,20 +451,20 @@ IF (NOT ${BUILD_ANDROID})
             "-DGLOG_INCLUDE=...")
   ENDIF (NOT EXISTS ${GLOG_INCLUDE})
   MESSAGE("-- Found Google Log header in: ${GLOG_INCLUDE}")
-ELSE (NOT ${BUILD_ANDROID})
+ELSE (NOT BUILD_ANDROID)
   SET(GLOG_LIB miniglog)
   MESSAGE("-- Using minimal Glog substitute for Android (library): ${GLOG_LIB}")
   SET(GLOG_INCLUDE internal/ceres/miniglog)
   MESSAGE("-- Using minimal Glog substitute for Android (include): ${GLOG_INCLUDE}")
-ENDIF (NOT ${BUILD_ANDROID})
+ENDIF (NOT BUILD_ANDROID)
 
 # Eigen
-MESSAGE("-- Check for Eigen 3.0")
 FIND_PATH(EIGEN_INCLUDE NAMES Eigen/Core PATHS ${EIGEN_SEARCH_HEADERS})
 IF (NOT EXISTS ${EIGEN_INCLUDE})
   MESSAGE(FATAL_ERROR "Can't find Eigen. Try passing -DEIGEN_INCLUDE=...")
+ELSE (NOT EXISTS ${EIGEN_INCLUDE})
+  MESSAGE("-- Found Eigen 3.x: ${EIGEN_INCLUDE}")
 ENDIF (NOT EXISTS ${EIGEN_INCLUDE})
-MESSAGE("-- Found Eigen 3.0: ${EIGEN_INCLUDE}")
 
 # Template specializations for the Schur complement based solvers. If
 # compile time, binary size or compiler performance is an issue, you
@@ -429,83 +473,108 @@ OPTION(SCHUR_SPECIALIZATIONS
        "Enable fixed-size schur specializations."
        ON)
 
-IF (NOT ${SCHUR_SPECIALIZATIONS})
+IF (NOT SCHUR_SPECIALIZATIONS)
   ADD_DEFINITIONS(-DCERES_RESTRICT_SCHUR_SPECIALIZATION)
   MESSAGE("-- Disabling Schur specializations (faster compiles)")
-ENDIF (NOT ${SCHUR_SPECIALIZATIONS})
+ENDIF (NOT SCHUR_SPECIALIZATIONS)
+
+# Line search minimizer is useful for large scale problems or when
+# sparse linear algebra libraries are not available. If compile time,
+# binary size or compiler performance is an issue, consider disabling
+# this.
+OPTION(LINE_SEARCH_MINIMIZER
+       "Enable the line search minimizer."
+       ON)
+
+IF (NOT LINE_SEARCH_MINIMIZER)
+  ADD_DEFINITIONS(-DCERES_NO_LINE_SEARCH_MINIMIZER)
+  MESSAGE("-- Disabling line search minimizer")
+ENDIF (NOT LINE_SEARCH_MINIMIZER)
+
+OPTION(CUSTOM_BLAS
+       "Use handcoded BLAS routines (usually faster) instead of Eigen."
+       ON)
+
+IF (NOT CUSTOM_BLAS)
+  ADD_DEFINITIONS(-DCERES_NO_CUSTOM_BLAS)
+  MESSAGE("-- Disabling custom blas")
+ENDIF (NOT CUSTOM_BLAS)
 
 # Multithreading using OpenMP
 OPTION(OPENMP
        "Enable threaded solving in Ceres (requires OpenMP)"
        ON)
 
-IF (${OPENMP})
-  FIND_PACKAGE(OpenMP)
-  IF(${OPENMP_FOUND})
-    MESSAGE("-- Found OpenMP.")
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-    ADD_DEFINITIONS(-DCERES_USE_OPENMP)
-  ELSE(${OPENMP_FOUND})
-    MESSAGE("-- Can't find OpenMP. Continuing without it.")
-  ENDIF(${OPENMP_FOUND})
-ENDIF (${OPENMP})
+IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  SET(OPENMP_FOUND FALSE)
+ELSE (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  IF (OPENMP)
+    FIND_PACKAGE(OpenMP)
+  ENDIF (OPENMP)
+ENDIF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 
-# Protocol buffers
-OPTION(PROTOBUF
-       "Enable protocol buffers support."
-       ON)
-
-IF (${PROTOBUF})
-  FIND_PACKAGE(Protobuf)
-  IF (${PROTOBUF_FOUND})
-    INCLUDE_DIRECTORIES(${PROTOBUF_INCLUDE_DIRS})
-    INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR}/internal)
-  ELSE (${PROTOBUF_FOUND})
-    ADD_DEFINITIONS(-DCERES_NO_PROTOCOL_BUFFERS)
-  ENDIF (${PROTOBUF_FOUND})
-ELSE (${PROTOBUF})
-  ADD_DEFINITIONS(-DCERES_NO_PROTOCOL_BUFFERS)
-ENDIF (${PROTOBUF})
-
-
-# Use threads but not on Android, where there is no support for OpenMP yet.
-IF ("${UNIX}" AND NOT ${BUILD_ANDROID})
-  # At least on Linux, we need pthreads to be enabled for mutex to compile.
-  # This may not work on windows or android.
-  FIND_PACKAGE(Threads REQUIRED)
-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_THREAD_LIBS_INIT}")
-  ADD_DEFINITIONS(-DCERES_HAVE_PTHREAD)
-  ADD_DEFINITIONS(-DCERES_HAVE_RWLOCK)
-ENDIF ("${UNIX}" AND NOT ${BUILD_ANDROID})
+IF (OPENMP_FOUND)
+  MESSAGE("-- Found OpenMP.")
+  ADD_DEFINITIONS(-DCERES_USE_OPENMP)
+  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+  IF (UNIX)
+    # At least on Linux, we need pthreads to be enabled for mutex to
+    # compile.  This may not work on Windows or Android.
+    FIND_PACKAGE(Threads REQUIRED)
+    SET(STATIC_LIBRARY_FLAGS
+        "${STATIC_LIBRARY_FLAGS} ${CMAKE_THREAD_LIBS_INIT}")
+    SET(CMAKE_SHARED_LINKER_FLAGS
+        "${CMAKE_SHARED_LINKER_FLAGS} ${CMAKE_THREAD_LIBS_INIT}")
+    ADD_DEFINITIONS(-DCERES_HAVE_PTHREAD)
+    ADD_DEFINITIONS(-DCERES_HAVE_RWLOCK)
+  ENDIF (UNIX)
+ELSE (OPENMP_FOUND)
+  MESSAGE("-- Can't find OpenMP. Disabling multithreading.")
+  ADD_DEFINITIONS(-DCERES_NO_THREADS)
+ENDIF (OPENMP_FOUND)
 
 # Disable threads in mutex.h. Someday, after there is OpenMP support in
 # Android, this can get removed. Also turn on a workaround for an NDK bug.
-IF (${BUILD_ANDROID})
+IF (BUILD_ANDROID)
   ADD_DEFINITIONS(-DCERES_NO_THREADS)
   ADD_DEFINITIONS(-DCERES_WORK_AROUND_ANDROID_NDK_COMPILER_BUG)
-ENDIF (${BUILD_ANDROID})
+ENDIF (BUILD_ANDROID)
 
 OPTION(DISABLE_TR1
        "Don't use TR1. This replaces some hash tables with sets. Slower."
        OFF)
 
-IF (${DISABLE_TR1})
+IF (DISABLE_TR1)
   MESSAGE("-- Replacing unordered_map/set with map/set (warning: slower!)")
   ADD_DEFINITIONS(-DCERES_NO_TR1)
-ELSE (${DISABLE_TR1})
+ELSE (DISABLE_TR1)
   MESSAGE("-- Using normal TR1 unordered_map/set")
   # Use the std namespace for the hash<> and related templates. This may vary by
   # system.
   IF (MSVC)
-    # This is known to work with Visual Studio 2010 Express.
-    ADD_DEFINITIONS("\"-DCERES_HASH_NAMESPACE_START=namespace std {\"")
-    ADD_DEFINITIONS("\"-DCERES_HASH_NAMESPACE_END=}\"")
+    IF (MSVC90)
+      # Special case for Visual Studio 2008.
+      # Newer versions have got tr1 symbols in another namespace,
+      # and this is being handled in Else branch of this condition.
+      # Probably Visual studio 2003 and 2005 also shall be handled here,
+      # but don't have by hand to verify and most likely they're not
+      # used by Ceres users anyway.
+      ADD_DEFINITIONS("\"-DCERES_HASH_NAMESPACE_START=namespace std { namespace tr1 {\"")
+      ADD_DEFINITIONS("\"-DCERES_HASH_NAMESPACE_END=}}\"")
+    ELSE (MSVC90)
+      # This is known to work with Visual Studio 2010 Express.
+      # Further, for as long Visual Studio 2012 didn't move tr1 to
+      # just another namespace, the same define will work for it as well.
+      # Hopefully all further versions will also keep working with this define.
+      ADD_DEFINITIONS("\"-DCERES_HASH_NAMESPACE_START=namespace std {\"")
+      ADD_DEFINITIONS("\"-DCERES_HASH_NAMESPACE_END=}\"")
+    ENDIF(MSVC90)
   ELSE (MSVC)
     # This is known to work with recent versions of Linux and Mac OS X.
     ADD_DEFINITIONS("\"-DCERES_HASH_NAMESPACE_START=namespace std { namespace tr1 {\"")
     ADD_DEFINITIONS("\"-DCERES_HASH_NAMESPACE_END=}}\"")
   ENDIF (MSVC)
-ENDIF (${DISABLE_TR1})
+ENDIF (DISABLE_TR1)
 
 INCLUDE_DIRECTORIES(
   include
@@ -521,27 +590,28 @@ INSTALL(FILES ${CERES_HDRS} DESTINATION include/ceres)
 FILE(GLOB CERES_PUBLIC_INTERNAL_HDRS ${CMAKE_SOURCE_DIR}/include/ceres/internal/*.h)
 INSTALL(FILES ${CERES_PUBLIC_INTERNAL_HDRS} DESTINATION include/ceres/internal)
 
-IF (${SUITESPARSE})
+IF (SUITESPARSE)
   INCLUDE_DIRECTORIES(${AMD_INCLUDE})
   INCLUDE_DIRECTORIES(${CAMD_INCLUDE})
   INCLUDE_DIRECTORIES(${COLAMD_INCLUDE})
   INCLUDE_DIRECTORIES(${CCOLAMD_INCLUDE})
   INCLUDE_DIRECTORIES(${CHOLMOD_INCLUDE})
-  IF (${SUITESPARSE_CONFIG_FOUND})
+  INCLUDE_DIRECTORIES(${SUITESPARSEQR_INCLUDE})
+  IF (SUITESPARSE_CONFIG_FOUND)
     INCLUDE_DIRECTORIES(${SUITESPARSE_CONFIG_INCLUDE})
-  ENDIF (${SUITESPARSE_CONFIG_FOUND})
-  IF (${UFCONFIG_FOUND})
+  ENDIF (SUITESPARSE_CONFIG_FOUND)
+  IF (UFCONFIG_FOUND)
     INCLUDE_DIRECTORIES(${UFCONFIG_INCLUDE})
-  ENDIF (${UFCONFIG_FOUND})
-ENDIF(${SUITESPARSE})
+  ENDIF (UFCONFIG_FOUND)
+ENDIF (SUITESPARSE)
 
-IF (${CXSPARSE})
+IF (CXSPARSE)
   INCLUDE_DIRECTORIES(${CXSPARSE_INCLUDE})
-ENDIF(${CXSPARSE})
+ENDIF (CXSPARSE)
 
-IF (${GFLAGS})
+IF (GFLAGS)
   INCLUDE_DIRECTORIES(${GFLAGS_INCLUDE})
-ENDIF (${GFLAGS})
+ENDIF (GFLAGS)
 
 # Change the default build type from Debug to Release, while still
 # supporting overriding the build type.
@@ -567,23 +637,36 @@ SET (CERES_CXX_FLAGS)
 
 IF (CMAKE_BUILD_TYPE STREQUAL "Release")
   IF (CMAKE_COMPILER_IS_GNUCXX)
-    IF (${BUILD_ANDROID})
+    IF (BUILD_ANDROID)
       # TODO(keir): Figure out what flags should go here to make an optimized
       # native ARM binary for Android.
-    ELSE (${BUILD_ANDROID})
+    ELSE (BUILD_ANDROID)
       # Linux
-      IF (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+      IF (CMAKE_SYSTEM_NAME MATCHES "Linux")
         SET (CERES_CXX_FLAGS "${CERES_CXX_FLAGS} -march=native -mtune=native")
-      ENDIF (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+      ENDIF (CMAKE_SYSTEM_NAME MATCHES "Linux")
       # Mac OS X
-      IF (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+      IF (CMAKE_SYSTEM_NAME MATCHES "Darwin")
         SET (CERES_CXX_FLAGS "${CERES_CXX_FLAGS} -fast -msse3")
-      ENDIF (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    ENDIF (${BUILD_ANDROID})
+      ENDIF (CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    ENDIF (BUILD_ANDROID)
   ENDIF (CMAKE_COMPILER_IS_GNUCXX)
-  SET (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${CERES_CXX_FLAGS}"
-       CACHE STRING "Release mode flags to the C++ Compiler" FORCE)
+  IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    # Use of -O4 requires use of gold linker & LLVM-gold plugin, which might
+    # well not be present / in use and without which files will compile, but
+    # not link ('file not recognized') so explicitly check for support
+    INCLUDE(CheckCXXCompilerFlag)
+    CHECK_CXX_COMPILER_FLAG("-O4" HAVE_LTO_SUPPORT)
+    IF (HAVE_LTO_SUPPORT)
+      MESSAGE(STATUS "Enabling link-time optimization (-O4)")
+      SET(CERES_CXX_FLAGS "${CERES_CXX_FLAGS} -O4")
+    ELSE ()
+      MESSAGE(STATUS "Compiler/linker does not support link-time optimization (-O4), disabling.")
+    ENDIF (HAVE_LTO_SUPPORT)
+  ENDIF ()
 ENDIF (CMAKE_BUILD_TYPE STREQUAL "Release")
+
+SET (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${CERES_CXX_FLAGS}")
 
 # After the tweaks for the compile settings, disable some warnings on MSVC.
 IF (MSVC)
@@ -612,36 +695,51 @@ IF (MSVC)
   # which results in linker warnings. This is irrelevant for Ceres, so ignore
   # the warnings.
   SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /ignore:4049")
+
+  # Tuple sizes of 10 are used by Gtest.
+  ADD_DEFINITIONS("-D_VARIADIC_MAX=10")
 ENDIF (MSVC)
 
-# GCC is not strict enough by default, so enable most of the warnings.
-IF ("${UNIX}")
+IF (UNIX)
+  # GCC is not strict enough by default, so enable most of the warnings.
   SET(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-unknown-pragmas -Wno-sign-compare -Wno-unused -Wno-unused-parameter")
-ENDIF ("${UNIX}")
+    "${CMAKE_CXX_FLAGS} -Werror -Wall -Wextra -Wno-unknown-pragmas -Wno-sign-compare -Wno-unused-parameter -Wno-missing-field-initializers")
+ENDIF (UNIX)
+
+# Use a larger inlining threshold for Clang, since it hobbles Eigen,
+# resulting in an unreasonably slow version of the blas routines. The
+# -Qunused-arguments is needed because CMake passes the inline
+# threshold to the linker and clang complains about it and dies.
+IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  SET(CMAKE_CXX_FLAGS
+      "${CMAKE_CXX_FLAGS} -Qunused-arguments -mllvm -inline-threshold=600 -Wno-return-type-c-linkage")
+ENDIF ()
 
 ADD_SUBDIRECTORY(internal/ceres)
 
 OPTION(BUILD_DOCUMENTATION
-       "Build User's Guide (pdf)"
+       "Build User's Guide (html)"
        OFF)
 
-IF (${BUILD_DOCUMENTATION})
+IF (BUILD_DOCUMENTATION)
   MESSAGE("-- Documentation building is enabled")
 
-  # Generate the User's Guide (pdf).
+  # Make CMake aware of the cmake folder, in order to find 'FindSphinx.cmake'
+  SET (CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+  # Generate the User's Guide (html).
   # The corresponding target is UserGuide, but is included in ALL.
   ADD_SUBDIRECTORY(docs)
-ENDIF (${BUILD_DOCUMENTATION})
+ENDIF (BUILD_DOCUMENTATION)
 
 OPTION(BUILD_EXAMPLES "Build examples" ON)
 
-IF (${BUILD_EXAMPLES})
+IF (BUILD_EXAMPLES)
   MESSAGE("-- Build the examples.")
   ADD_SUBDIRECTORY(examples)
-ELSE (${BUILD_EXAMPLES})
+ELSE (BUILD_EXAMPLES)
   MESSAGE("-- Do not build any example.")
-ENDIF (${BUILD_EXAMPLES})
+ENDIF (BUILD_EXAMPLES)
 
 # Add an uninstall target to remove all installed files.
 CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/uninstall.cmake.in"
@@ -650,3 +748,45 @@ CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/uninstall.cmake.in"
 
 ADD_CUSTOM_TARGET(uninstall
                   COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/cmake/uninstall.cmake)
+
+# Set up install directories. INCLUDE_INSTALL_DIR, LIB_INSTALL_DIR and
+# CMAKECONFIG_INSTALL_DIR must not be absolute paths.
+SET(INCLUDE_INSTALL_DIR include)
+SET(LIB_INSTALL_DIR lib)
+SET(CMAKECONFIG_INSTALL_DIR share/Ceres)
+
+# This "exports" all targets which have been put into the export set
+# "CeresExport". This means that CMake generates a file with the given
+# filename, which can later on be loaded by projects using this package.
+# This file contains ADD_LIBRARY(bar IMPORTED) statements for each target
+# in the export set, so when loaded later on CMake will create "imported"
+# library targets from these, which can be used in many ways in the same way
+# as a normal library target created via a normal ADD_LIBRARY().
+INSTALL(EXPORT CeresExport
+        DESTINATION ${CMAKECONFIG_INSTALL_DIR} FILE CeresTargets.cmake)
+
+# Figure out the relative path from the installed Config.cmake file to the
+# install prefix (which may be at runtime different from the chosen
+# CMAKE_INSTALL_PREFIX if under Windows the package was installed anywhere)
+# This relative path will be configured into the CeresConfig.cmake.
+FILE(RELATIVE_PATH relInstallDir
+     ${CMAKE_INSTALL_PREFIX}/${CMAKECONFIG_INSTALL_DIR} ${CMAKE_INSTALL_PREFIX})
+
+# Create a CeresConfig.cmake file. <name>Config.cmake files are searched by
+# FIND_PACKAGE() automatically. We configure that file so that we can put any
+# information we want in it, e.g. version numbers, include directories, etc.
+CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/CeresConfig.cmake.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/CeresConfig.cmake" @ONLY)
+
+# Additionally, when CMake has found a CeresConfig.cmake, it can check for a
+# CeresConfigVersion.cmake in the same directory when figuring out the version
+# of the package when a version has been specified in the FIND_PACKAGE() call,
+# e.g. FIND_PACKAGE(Ceres [1.4.2] REQUIRED). The version argument is optional.
+CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/CeresConfigVersion.cmake.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/CeresConfigVersion.cmake" @ONLY)
+
+# Install these two files into the same directory as the generated exports-file.
+INSTALL(FILES "${CMAKE_CURRENT_BINARY_DIR}/CeresConfig.cmake"
+              "${CMAKE_CURRENT_BINARY_DIR}/CeresConfigVersion.cmake"
+              "${CMAKE_SOURCE_DIR}/cmake/depend.cmake"
+        DESTINATION ${CMAKECONFIG_INSTALL_DIR})

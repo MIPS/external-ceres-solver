@@ -55,8 +55,7 @@ using ceres::Problem;
 using ceres::Solver;
 using ceres::Solve;
 
-class F1 {
- public:
+struct F1 {
   template <typename T> bool operator()(const T* const x1,
                                         const T* const x2,
                                         T* residual) const {
@@ -66,8 +65,7 @@ class F1 {
   }
 };
 
-class F2 {
- public:
+struct F2 {
   template <typename T> bool operator()(const T* const x3,
                                         const T* const x4,
                                         T* residual) const {
@@ -77,8 +75,7 @@ class F2 {
   }
 };
 
-class F3 {
- public:
+struct F3 {
   template <typename T> bool operator()(const T* const x2,
                                         const T* const x4,
                                         T* residual) const {
@@ -88,8 +85,7 @@ class F3 {
   }
 };
 
-class F4 {
- public:
+struct F4 {
   template <typename T> bool operator()(const T* const x1,
                                         const T* const x4,
                                         T* residual) const {
@@ -98,6 +94,9 @@ class F4 {
     return true;
   }
 };
+
+DEFINE_string(minimizer, "trust_region",
+              "Minimizer type to use, choices are: line_search & trust_region");
 
 int main(int argc, char** argv) {
   google::ParseCommandLineFlags(&argc, &argv, true);
@@ -125,13 +124,15 @@ int main(int argc, char** argv) {
                            NULL,
                            &x1, &x4);
 
-  // Run the solver!
   Solver::Options options;
-  options.max_num_iterations = 30;
+  LOG_IF(FATAL, !ceres::StringToMinimizerType(FLAGS_minimizer,
+                                              &options.minimizer_type))
+      << "Invalid minimizer: " << FLAGS_minimizer
+      << ", valid options are: trust_region and line_search.";
+
+  options.max_num_iterations = 100;
   options.linear_solver_type = ceres::DENSE_QR;
   options.minimizer_progress_to_stdout = true;
-
-  Solver::Summary summary;
 
   std::cout << "Initial x1 = " << x1
             << ", x2 = " << x2
@@ -139,9 +140,11 @@ int main(int argc, char** argv) {
             << ", x4 = " << x4
             << "\n";
 
+  // Run the solver!
+  Solver::Summary summary;
   Solve(options, &problem, &summary);
 
-  std::cout << summary.BriefReport() << "\n";
+  std::cout << summary.FullReport() << "\n";
   std::cout << "Final x1 = " << x1
             << ", x2 = " << x2
             << ", x3 = " << x3

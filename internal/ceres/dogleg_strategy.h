@@ -53,8 +53,8 @@ namespace internal {
 // This finds the exact optimum over the two-dimensional subspace
 // spanned by the two Dogleg vectors.
 class DoglegStrategy : public TrustRegionStrategy {
-public:
-  DoglegStrategy(const TrustRegionStrategy::Options& options);
+ public:
+  explicit DoglegStrategy(const TrustRegionStrategy::Options& options);
   virtual ~DoglegStrategy() {}
 
   // TrustRegionStrategy interface
@@ -79,8 +79,10 @@ public:
   typedef Eigen::Matrix<double, 2, 1, Eigen::DontAlign> Vector2d;
   typedef Eigen::Matrix<double, 2, 2, Eigen::DontAlign> Matrix2d;
 
-  LinearSolver::Summary ComputeGaussNewtonStep(SparseMatrix* jacobian,
-                                               const double* residuals);
+  LinearSolver::Summary ComputeGaussNewtonStep(
+      const PerSolveOptions& per_solve_options,
+      SparseMatrix* jacobian,
+      const double* residuals);
   void ComputeCauchyPoint(SparseMatrix* jacobian);
   void ComputeGradient(SparseMatrix* jacobian, const double* residuals);
   void ComputeTraditionalDoglegStep(double* step);

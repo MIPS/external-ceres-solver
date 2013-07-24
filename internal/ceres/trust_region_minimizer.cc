@@ -41,6 +41,7 @@
 #include "Eigen/Core"
 #include "ceres/array_utils.h"
 #include "ceres/evaluator.h"
+#include "ceres/file.h"
 #include "ceres/internal/eigen.h"
 #include "ceres/internal/scoped_ptr.h"
 #include "ceres/linear_least_squares_problems.h"
@@ -58,21 +59,6 @@ namespace {
 const double kEpsilon = 1e-12;
 }  // namespace
 
-// Execute the list of IterationCallbacks sequentially. If any one of
-// the callbacks does not return SOLVER_CONTINUE, then stop and return
-// its status.
-CallbackReturnType TrustRegionMinimizer::RunCallbacks(
-    const IterationSummary& iteration_summary) {
-  for (int i = 0; i < options_.callbacks.size(); ++i) {
-    const CallbackReturnType status =
-        (*options_.callbacks[i])(iteration_summary);
-    if (status != SOLVER_CONTINUE) {
-      return status;
-    }
-  }
-  return SOLVER_CONTINUE;
-}
-
 // Compute a scaling vector that is used to improve the conditioning
 // of the Jacobian.
 void TrustRegionMinimizer::EstimateScale(const SparseMatrix& jacobian,
@@ -85,25 +71,8 @@ void TrustRegionMinimizer::EstimateScale(const SparseMatrix& jacobian,
 
 void TrustRegionMinimizer::Init(const Minimizer::Options& options) {
   options_ = options;
-  sort(options_.lsqp_iterations_to_dump.begin(),
-       options_.lsqp_iterations_to_dump.end());
-}
-
-bool TrustRegionMinimizer::MaybeDumpLinearLeastSquaresProblem(
-    const int iteration,
-    const SparseMatrix* jacobian,
-    const double* residuals,
-    const double* step) const  {
-  // TODO(sameeragarwal): Since the use of trust_region_radius has
-  // moved inside TrustRegionStrategy, its not clear how we dump the
-  // regularization vector/matrix anymore.
-  //
-  // Also num_eliminate_blocks is not visible to the trust region
-  // minimizer either.
-  //
-  // Both of these indicate that this is the wrong place for this
-  // code, and going forward this should needs fixing/refactoring.
-  return true;
+  sort(options_.trust_region_minimizer_iterations_to_dump.begin(),
+       options_.trust_region_minimizer_iterations_to_dump.end());
 }
 
 void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
@@ -154,13 +123,15 @@ void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
 
   // Do initial cost and Jacobian evaluation.
   double cost = 0.0;
-  if (!evaluator->Evaluate(x.data(), &cost, residuals.data(), NULL, jacobian)) {
+  if (!evaluator->Evaluate(x.data(),
+                           &cost,
+                           residuals.data(),
+                           gradient.data(),
+                           jacobian)) {
     LOG(WARNING) << "Terminating: Residual and Jacobian evaluation failed.";
     summary->termination_type = NUMERICAL_FAILURE;
     return;
   }
-
-  iteration_summary.cost = cost + summary->fixed_cost;
 
   int num_consecutive_nonmonotonic_steps = 0;
   double minimum_cost = cost;
@@ -169,29 +140,22 @@ void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
   double candidate_cost = cost;
   double accumulated_candidate_model_cost_change = 0.0;
 
-  gradient.setZero();
-  jacobian->LeftMultiply(residuals.data(), gradient.data());
+  summary->initial_cost = cost + summary->fixed_cost;
+  iteration_summary.cost = cost + summary->fixed_cost;
   iteration_summary.gradient_max_norm = gradient.lpNorm<Eigen::Infinity>();
-
-  if (options_.jacobi_scaling) {
-    EstimateScale(*jacobian, scale.data());
-    jacobian->ScaleColumns(scale.data());
-  } else {
-    scale.setOnes();
-  }
 
   // The initial gradient max_norm is bounded from below so that we do
   // not divide by zero.
-  const double gradient_max_norm_0 =
+  const double initial_gradient_max_norm =
       max(iteration_summary.gradient_max_norm, kEpsilon);
   const double absolute_gradient_tolerance =
-      options_.gradient_tolerance * gradient_max_norm_0;
+      options_.gradient_tolerance * initial_gradient_max_norm;
 
   if (iteration_summary.gradient_max_norm <= absolute_gradient_tolerance) {
     summary->termination_type = GRADIENT_TOLERANCE;
     VLOG(1) << "Terminating: Gradient tolerance reached."
             << "Relative gradient max norm: "
-            << iteration_summary.gradient_max_norm / gradient_max_norm_0
+            << iteration_summary.gradient_max_norm / initial_gradient_max_norm
             << " <= " << options_.gradient_tolerance;
     return;
   }
@@ -203,24 +167,20 @@ void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
       + summary->preprocessor_time_in_seconds;
   summary->iterations.push_back(iteration_summary);
 
-  // Call the various callbacks.
-  switch (RunCallbacks(iteration_summary)) {
-    case SOLVER_TERMINATE_SUCCESSFULLY:
-      summary->termination_type = USER_SUCCESS;
-      VLOG(1) << "Terminating: User callback returned USER_SUCCESS.";
-      return;
-    case SOLVER_ABORT:
-      summary->termination_type = USER_ABORT;
-      VLOG(1) << "Terminating: User callback returned  USER_ABORT.";
-      return;
-    case SOLVER_CONTINUE:
-      break;
-    default:
-      LOG(FATAL) << "Unknown type of user callback status";
+  if (options_.jacobi_scaling) {
+    EstimateScale(*jacobian, scale.data());
+    jacobian->ScaleColumns(scale.data());
+  } else {
+    scale.setOnes();
   }
 
   int num_consecutive_invalid_steps = 0;
+  bool inner_iterations_are_enabled = options.inner_iteration_minimizer != NULL;
   while (true) {
+    if (!RunCallbacks(options.callbacks, iteration_summary, summary)) {
+      return;
+    }
+
     iteration_start_time = WallTimeInSeconds();
     if (iteration_summary.iteration >= options_.max_num_iterations) {
       summary->termination_type = NO_CONVERGENCE;
@@ -236,33 +196,38 @@ void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
       break;
     }
 
-    iteration_summary = IterationSummary();
-    iteration_summary = summary->iterations.back();
-    iteration_summary.iteration = summary->iterations.back().iteration + 1;
-    iteration_summary.step_is_valid = false;
-    iteration_summary.step_is_successful = false;
-
     const double strategy_start_time = WallTimeInSeconds();
     TrustRegionStrategy::PerSolveOptions per_solve_options;
     per_solve_options.eta = options_.eta;
+    if (find(options_.trust_region_minimizer_iterations_to_dump.begin(),
+             options_.trust_region_minimizer_iterations_to_dump.end(),
+             iteration_summary.iteration) !=
+        options_.trust_region_minimizer_iterations_to_dump.end()) {
+      per_solve_options.dump_format_type =
+          options_.trust_region_problem_dump_format_type;
+      per_solve_options.dump_filename_base =
+          JoinPath(options_.trust_region_problem_dump_directory,
+                   StringPrintf("ceres_solver_iteration_%03d",
+                                iteration_summary.iteration));
+    } else {
+      per_solve_options.dump_format_type = TEXTFILE;
+      per_solve_options.dump_filename_base.clear();
+    }
+
     TrustRegionStrategy::Summary strategy_summary =
         strategy->ComputeStep(per_solve_options,
                               jacobian,
                               residuals.data(),
                               trust_region_step.data());
 
+    iteration_summary = IterationSummary();
+    iteration_summary.iteration = summary->iterations.back().iteration + 1;
     iteration_summary.step_solver_time_in_seconds =
         WallTimeInSeconds() - strategy_start_time;
     iteration_summary.linear_solver_iterations =
         strategy_summary.num_iterations;
-
-    if (!MaybeDumpLinearLeastSquaresProblem(iteration_summary.iteration,
-                                            jacobian,
-                                            residuals.data(),
-                                            trust_region_step.data())) {
-      LOG(FATAL) << "Tried writing linear least squares problem: "
-                 << options.lsqp_dump_directory << "but failed.";
-    }
+    iteration_summary.step_is_valid = false;
+    iteration_summary.step_is_successful = false;
 
     double model_cost_change = 0.0;
     if (strategy_summary.termination_type != FAILURE) {
@@ -342,27 +307,43 @@ void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
         new_cost = numeric_limits<double>::max();
       } else {
         // Check if performing an inner iteration will make it better.
-        if (options.inner_iteration_minimizer != NULL) {
+        if (inner_iterations_are_enabled) {
+          ++summary->num_inner_iteration_steps;
+          double inner_iteration_start_time = WallTimeInSeconds();
           const double x_plus_delta_cost = new_cost;
           Vector inner_iteration_x = x_plus_delta;
           Solver::Summary inner_iteration_summary;
           options.inner_iteration_minimizer->Minimize(options,
                                                       inner_iteration_x.data(),
                                                       &inner_iteration_summary);
-          if(!evaluator->Evaluate(inner_iteration_x.data(),
-                                  &new_cost,
-                                  NULL, NULL, NULL)) {
+          if (!evaluator->Evaluate(inner_iteration_x.data(),
+                                   &new_cost,
+                                   NULL, NULL, NULL)) {
             VLOG(2) << "Inner iteration failed.";
             new_cost = x_plus_delta_cost;
           } else {
             x_plus_delta = inner_iteration_x;
-            // Bost the model_cost_change, since the inner iteration
+            // Boost the model_cost_change, since the inner iteration
             // improvements are not accounted for by the trust region.
             model_cost_change +=  x_plus_delta_cost - new_cost;
             VLOG(2) << "Inner iteration succeeded; current cost: " << cost
                     << " x_plus_delta_cost: " << x_plus_delta_cost
                     << " new_cost: " << new_cost;
+            const double inner_iteration_relative_progress =
+                (x_plus_delta_cost - new_cost) / x_plus_delta_cost;
+            inner_iterations_are_enabled =
+                (inner_iteration_relative_progress >
+                 options.inner_iteration_tolerance);
+
+            // Disable inner iterations once the relative improvement
+            // drops below tolerance.
+            if (!inner_iterations_are_enabled) {
+              VLOG(2) << "Disabling inner iterations. Progress : "
+                      << inner_iteration_relative_progress;
+            }
           }
+          summary->inner_iteration_time_in_seconds +=
+              WallTimeInSeconds() - inner_iteration_start_time;
         }
       }
 
@@ -381,7 +362,6 @@ void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
         return;
       }
 
-      VLOG(2) << "old cost: " << cost << " new cost: " << new_cost;
       iteration_summary.cost_change =  cost - new_cost;
       const double absolute_function_tolerance =
           options_.function_tolerance * cost;
@@ -445,23 +425,23 @@ void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
       if (!evaluator->Evaluate(x.data(),
                                &cost,
                                residuals.data(),
-                               NULL,
+                               gradient.data(),
                                jacobian)) {
         summary->termination_type = NUMERICAL_FAILURE;
-        summary->error = "Terminating: Residual and Jacobian evaluation failed.";
+        summary->error =
+            "Terminating: Residual and Jacobian evaluation failed.";
         LOG(WARNING) << summary->error;
         return;
       }
 
-      gradient.setZero();
-      jacobian->LeftMultiply(residuals.data(), gradient.data());
       iteration_summary.gradient_max_norm = gradient.lpNorm<Eigen::Infinity>();
 
       if (iteration_summary.gradient_max_norm <= absolute_gradient_tolerance) {
         summary->termination_type = GRADIENT_TOLERANCE;
         VLOG(1) << "Terminating: Gradient tolerance reached."
                 << "Relative gradient max norm: "
-                << iteration_summary.gradient_max_norm / gradient_max_norm_0
+                << (iteration_summary.gradient_max_norm /
+                    initial_gradient_max_norm)
                 << " <= " << options_.gradient_tolerance;
         return;
       }
@@ -534,21 +514,6 @@ void TrustRegionMinimizer::Minimize(const Minimizer::Options& options,
         WallTimeInSeconds() - start_time
         + summary->preprocessor_time_in_seconds;
     summary->iterations.push_back(iteration_summary);
-
-    switch (RunCallbacks(iteration_summary)) {
-      case SOLVER_TERMINATE_SUCCESSFULLY:
-        summary->termination_type = USER_SUCCESS;
-        VLOG(1) << "Terminating: User callback returned USER_SUCCESS.";
-        return;
-      case SOLVER_ABORT:
-        summary->termination_type = USER_ABORT;
-        VLOG(1) << "Terminating: User callback returned  USER_ABORT.";
-        return;
-      case SOLVER_CONTINUE:
-        break;
-      default:
-        LOG(FATAL) << "Unknown type of user callback status";
-    }
   }
 }
 

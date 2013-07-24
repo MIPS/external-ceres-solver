@@ -33,19 +33,24 @@ SET(CERES_INTERNAL_SRC
     block_evaluate_preparer.cc
     block_jacobi_preconditioner.cc
     block_jacobian_writer.cc
+    block_random_access_crs_matrix.cc
     block_random_access_dense_matrix.cc
     block_random_access_matrix.cc
     block_random_access_sparse_matrix.cc
     block_sparse_matrix.cc
     block_structure.cc
+    c_api.cc
     canonical_views_clustering.cc
     cgnr_solver.cc
+    compressed_col_sparse_matrix_utils.cc
     compressed_row_jacobian_writer.cc
     compressed_row_sparse_matrix.cc
     conditioned_cost_function.cc
     conjugate_gradients_solver.cc
     coordinate_descent_minimizer.cc
     corrector.cc
+    covariance.cc
+    covariance_impl.cc
     cxsparse.cc
     dense_normal_cholesky_solver.cc
     dense_qr_solver.cc
@@ -56,17 +61,24 @@ SET(CERES_INTERNAL_SRC
     file.cc
     gradient_checking_cost_function.cc
     implicit_schur_complement.cc
+    incomplete_lq_factorization.cc
     iterative_schur_complement_solver.cc
     levenberg_marquardt_strategy.cc
+    line_search.cc
+    line_search_direction.cc
+    line_search_minimizer.cc
     linear_least_squares_problems.cc
     linear_operator.cc
     linear_solver.cc
     local_parameterization.cc
     loss_function.cc
+    low_rank_inverse_hessian.cc
+    minimizer.cc
     normal_prior.cc
     parameter_block_ordering.cc
     partitioned_matrix_view.cc
-    polynomial_solver.cc
+    polynomial.cc
+    preconditioner.cc
     problem.cc
     problem_impl.cc
     program.cc
@@ -75,6 +87,7 @@ SET(CERES_INTERNAL_SRC
     runtime_numeric_diff_cost_function.cc
     schur_complement_solver.cc
     schur_eliminator.cc
+    schur_jacobi_preconditioner.cc
     scratch_evaluate_preparer.cc
     solver.cc
     solver_impl.cc
@@ -92,23 +105,32 @@ SET(CERES_INTERNAL_SRC
     wall_time.cc
 )
 
-If (${PROTOBUF_FOUND})
-  PROTOBUF_GENERATE_CPP(PROTO_SRCS PROTO_HDRS matrix.proto)
-ENDIF (${PROTOBUF_FOUND})
+# Heuristic for determining LIB_SUFFIX. FHS recommends that 64-bit systems
+# install native libraries to lib64 rather than lib. Most distros seem to
+# follow this convention with a couple notable exceptions (Debian-based and
+# Arch-based distros) which we try to detect here.
+IF (CMAKE_SYSTEM_NAME MATCHES "Linux" AND
+    NOT DEFINED LIB_SUFFIX AND
+    NOT CMAKE_CROSSCOMPILING AND
+    CMAKE_SIZEOF_VOID_P EQUAL "8" AND
+    NOT EXISTS "/etc/debian_version" AND
+    NOT EXISTS "/etc/arch-release")
+  SET(LIB_SUFFIX "64")
+ENDIF ()
 
 # Also depend on the header files so that they appear in IDEs.
 FILE(GLOB CERES_INTERNAL_HDRS *.h)
 
 # Include the specialized schur solvers.
-IF (${SCHUR_SPECIALIZATIONS})
+IF (SCHUR_SPECIALIZATIONS)
   FILE(GLOB CERES_INTERNAL_SCHUR_FILES generated/*.cc)
-ELSE (${SCHUR_SPECIALIZATIONS})
+ELSE (SCHUR_SPECIALIZATIONS)
   # Only the fully dynamic solver. The build is much faster this way.
   FILE(GLOB CERES_INTERNAL_SCHUR_FILES generated/schur_eliminator_d_d_d.cc)
-ENDIF (${SCHUR_SPECIALIZATIONS})
+ENDIF (SCHUR_SPECIALIZATIONS)
 
 # For Android, use the internal Glog implementation.
-IF (${BUILD_ANDROID})
+IF (BUILD_ANDROID)
   ADD_LIBRARY(miniglog STATIC
               miniglog/glog/logging.cc)
 
@@ -117,18 +139,20 @@ IF (${BUILD_ANDROID})
   TARGET_LINK_LIBRARIES(miniglog log)
 
   INSTALL(TARGETS miniglog
+          EXPORT  CeresExport
           RUNTIME DESTINATION bin
-          LIBRARY DESTINATION lib
-          ARCHIVE DESTINATION lib)
-ENDIF (${BUILD_ANDROID})
+          LIBRARY DESTINATION lib${LIB_SUFFIX}
+          ARCHIVE DESTINATION lib${LIB_SUFFIX})
+ENDIF (BUILD_ANDROID)
 
 SET(CERES_LIBRARY_DEPENDENCIES ${GLOG_LIB})
 
-IF (${GFLAGS})
+IF (GFLAGS)
   LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${GFLAGS_LIB})
-ENDIF (${GFLAGS})
+ENDIF (GFLAGS)
 
-IF (${SUITESPARSE_FOUND})
+IF (SUITESPARSE_FOUND)
+  LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${SUITESPARSEQR_LIB})
   LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${CHOLMOD_LIB})
   LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${CCOLAMD_LIB})
   LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${CAMD_LIB})
@@ -147,25 +171,25 @@ IF (${SUITESPARSE_FOUND})
   IF (EXISTS ${BLAS_LIB})
     LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${BLAS_LIB})
   ENDIF (EXISTS ${BLAS_LIB})
-ENDIF (${SUITESPARSE_FOUND})
 
-IF (${CXSPARSE_FOUND})
+  IF (TBB_FOUND)
+    LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${TBB_LIB})
+    LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${TBB_MALLOC_LIB})
+  ENDIF (TBB_FOUND)
+ENDIF (SUITESPARSE_FOUND)
+
+
+IF (CXSPARSE_FOUND)
   LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${CXSPARSE_LIB})
-ENDIF (${CXSPARSE_FOUND})
+ENDIF (CXSPARSE_FOUND)
 
-IF (${OPENMP_FOUND})
+IF (OPENMP_FOUND)
   IF (NOT MSVC)
     LIST(APPEND CERES_LIBRARY_DEPENDENCIES gomp)
   ENDIF (NOT MSVC)
-ENDIF (${OPENMP_FOUND})
-
-IF (${PROTOBUF_FOUND})
-  LIST(APPEND CERES_LIBRARY_DEPENDENCIES ${PROTOBUF_LIBRARY})
-ENDIF (${PROTOBUF_FOUND})
+ENDIF (OPENMP_FOUND)
 
 SET(CERES_LIBRARY_SOURCE
-    ${PROTO_SRCS}
-    ${PROTO_HDRS}
     ${CERES_INTERNAL_SRC}
     ${CERES_INTERNAL_HDRS}
     ${CERES_INTERNAL_SCHUR_FILES})
@@ -174,13 +198,14 @@ ADD_LIBRARY(ceres STATIC ${CERES_LIBRARY_SOURCE})
 TARGET_LINK_LIBRARIES(ceres ${CERES_LIBRARY_DEPENDENCIES})
 
 INSTALL(TARGETS ceres
+        EXPORT  CeresExport
         RUNTIME DESTINATION bin
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib)
+        LIBRARY DESTINATION lib${LIB_SUFFIX}
+        ARCHIVE DESTINATION lib${LIB_SUFFIX})
 
 # Don't build a DLL on MSVC. Supporting Ceres as a DLL on Windows involves
 # nontrivial changes that we haven't made yet.
-IF (NOT MSVC AND NOT ${BUILD_ANDROID})
+IF (NOT MSVC AND NOT BUILD_ANDROID AND BUILD_SHARED)
   ADD_LIBRARY(ceres_shared SHARED ${CERES_LIBRARY_SOURCE})
   TARGET_LINK_LIBRARIES(ceres_shared ${CERES_LIBRARY_DEPENDENCIES})
   SET_TARGET_PROPERTIES(ceres_shared PROPERTIES
@@ -188,15 +213,20 @@ IF (NOT MSVC AND NOT ${BUILD_ANDROID})
                         SOVERSION ${CERES_ABI_VERSION})
 
   INSTALL(TARGETS ceres_shared
+          EXPORT  CeresExport
           RUNTIME DESTINATION bin
-          LIBRARY DESTINATION lib
-          ARCHIVE DESTINATION lib)
+          LIBRARY DESTINATION lib${LIB_SUFFIX}
+          ARCHIVE DESTINATION lib${LIB_SUFFIX})
 
-ENDIF (NOT MSVC AND NOT ${BUILD_ANDROID})
+ENDIF (NOT MSVC AND NOT BUILD_ANDROID AND BUILD_SHARED)
 
-IF (${BUILD_TESTING} AND ${GFLAGS})
+IF (BUILD_TESTING AND GFLAGS)
   ADD_LIBRARY(gtest gmock_gtest_all.cc gmock_main.cc)
-  ADD_LIBRARY(test_util test_util.cc)
+  ADD_LIBRARY(test_util
+              evaluator_test_utils.cc
+              numeric_diff_test_utils.cc
+              test_util.cc)
+
   TARGET_LINK_LIBRARIES(gtest ${GFLAGS_LIB} ${GLOG_LIB})
 
   MACRO (CERES_TEST NAME)
@@ -211,20 +241,28 @@ IF (${BUILD_TESTING} AND ${GFLAGS})
   CERES_TEST(array_utils)
   CERES_TEST(autodiff)
   CERES_TEST(autodiff_cost_function)
+  CERES_TEST(autodiff_local_parameterization)
+  CERES_TEST(blas)
+  CERES_TEST(block_random_access_crs_matrix)
   CERES_TEST(block_random_access_dense_matrix)
   CERES_TEST(block_random_access_sparse_matrix)
   CERES_TEST(block_sparse_matrix)
+  CERES_TEST(c_api)
   CERES_TEST(canonical_views_clustering)
   CERES_TEST(compressed_row_sparse_matrix)
   CERES_TEST(conditioned_cost_function)
   CERES_TEST(corrector)
+  CERES_TEST(cost_function_to_functor)
+  CERES_TEST(covariance)
   CERES_TEST(dense_sparse_matrix)
+  CERES_TEST(dynamic_autodiff_cost_function)
   CERES_TEST(evaluator)
   CERES_TEST(gradient_checker)
   CERES_TEST(gradient_checking_cost_function)
   CERES_TEST(graph)
   CERES_TEST(graph_algorithms)
   CERES_TEST(implicit_schur_complement)
+  CERES_TEST(incomplete_lq_factorization)
   CERES_TEST(iterative_schur_complement_solver)
   CERES_TEST(jet)
   CERES_TEST(levenberg_marquardt_strategy)
@@ -234,11 +272,12 @@ IF (${BUILD_TESTING} AND ${GFLAGS})
   CERES_TEST(minimizer)
   CERES_TEST(normal_prior)
   CERES_TEST(numeric_diff_cost_function)
+  CERES_TEST(numeric_diff_functor)
   CERES_TEST(ordered_groups)
   CERES_TEST(parameter_block)
   CERES_TEST(parameter_block_ordering)
   CERES_TEST(partitioned_matrix_view)
-  CERES_TEST(polynomial_solver)
+  CERES_TEST(polynomial)
   CERES_TEST(problem)
   CERES_TEST(residual_block)
   CERES_TEST(residual_block_utils)
@@ -248,9 +287,11 @@ IF (${BUILD_TESTING} AND ${GFLAGS})
   CERES_TEST(schur_eliminator)
   CERES_TEST(solver_impl)
 
-  IF (${SUITESPARSE_FOUND})
-    CERES_TEST(suitesparse)
-  ENDIF (${SUITESPARSE_FOUND})
+  # TODO(sameeragarwal): This test should ultimately be made
+  # independent of SuiteSparse.
+  IF (SUITESPARSE_FOUND)
+    CERES_TEST(compressed_col_sparse_matrix_utils)
+  ENDIF (SUITESPARSE_FOUND)
 
   CERES_TEST(symmetric_linear_solver)
   CERES_TEST(triplet_sparse_matrix)
@@ -261,4 +302,4 @@ IF (${BUILD_TESTING} AND ${GFLAGS})
 
   # Put the large end to end test last.
   CERES_TEST(system)
-ENDIF (${BUILD_TESTING} AND ${GFLAGS})
+ENDIF (BUILD_TESTING AND GFLAGS)

@@ -30,8 +30,7 @@
 #
 # Author: mierle@gmail.com (Keir Mierle)
 #
-# Note: you will need a fairly complete latex installation, along with
-# pygments, for this to work.
+# Note: You will need Sphinx and Pygments installed for this to work.
 
 if [ -z $1 ] ; then
   echo 'usage: scripts/make_release <version>'
@@ -41,9 +40,9 @@ fi
 
 TMP="/tmp/ceres-solver-$1"
 DOCS_TMP="/tmp/ceres-solver-docs-$1"
-VERSION=$(grep 'SET(CERES_VERSION' CMakeLists.txt | \
-          sed -e 's/SET(CERES_VERSION //' | \
-          sed -e 's/)//')
+VERSION=$(grep 'SET(CERES_VERSION_' CMakeLists.txt | \
+          sed -e 's/\(.*\) \(.*\))/\2/' | \
+          tr '\n' '.' | sed -e 's/.$//')
 ABI_VERSION=$(grep 'SET(CERES_ABI_VERSION' CMakeLists.txt | \
               sed -e 's/SET(CERES_ABI_VERSION //' | \
               sed -e 's/)//')
@@ -52,6 +51,8 @@ VERSION_IN_HEADER=$(grep '#define CERES_VERSION' include/ceres/ceres.h | \
 ABI_VERSION_IN_HEADER=$(grep '#define CERES_ABI_VERSION' \
                               include/ceres/ceres.h | \
                         sed -e 's/#define CERES_ABI_VERSION //')
+VERSION_IN_SPEC=$(grep '^Version:' scripts/ceres-solver.spec | \
+                  sed -e 's/Version: *//')
 GIT_COMMIT=$(git log -1 HEAD |grep commit)
 
 if [[ $1 != $VERSION ]] ; then
@@ -79,9 +80,17 @@ if [[ $ABI_VERSION_IN_HEADER != $ABI_VERSION ]] ; then
   exit 1
 fi
 
-# Clone the repository and clean out the git extras.
-git clone . $TMP
-rm -rf "$TMP/.git"
+if [[ $VERSION_IN_SPEC != $VERSION ]] ; then
+  echo "ERROR: Version string from scripts/ceres-solver.spec, which is"
+  echo "       $VERSION_IN_SPEC, does not match the version"
+  echo "       from the toplevel CMakeLists.txt, which is $ABI_VERSION."
+  echo "       You may not be in the toplevel source directory, or the"
+  echo "       versions are out of sync."
+  exit 1
+fi
+
+# Export repository.
+git checkout-index -f -a --prefix=$TMP/
 
 # Build the VERSION file.
 VERSIONFILE=$TMP/VERSION
@@ -90,26 +99,26 @@ echo "abi_version $VERSION" >> $VERSIONFILE
 echo "$GIT_COMMIT" >> $VERSIONFILE
 
 # Build the documentation.
-cp -pr "$TMP/docs" $DOCS_TMP
-cd $DOCS_TMP
-curl http://minted.googlecode.com/files/minted.sty > minted.sty
-pdflatex -shell-escape ceres-solver && \
-  bibtex ceres-solver && \
-  pdflatex -shell-escape ceres-solver && \
-  pdflatex -shell-escape ceres-solver
-cp $DOCS_TMP/ceres-solver.pdf "$TMP/docs/ceres-solver.pdf"
-cp $DOCS_TMP/ceres-solver.pdf "/tmp/ceres-solver-$1.pdf"
+python $TMP/scripts/make_docs.py $TMP $DOCS_TMP
+cp -pr $DOCS_TMP/html $TMP/docs
 
 # Build the tarball.
 cd /tmp
 tar -cvzf "ceres-solver-$1.tar.gz" "ceres-solver-$1"
 
 # Don't leave a mess behind.
-rm -rf $DOCS_TMP
 rm -rf $TMP
+rm -rf $DOCS_TMP
 
 # Reminder to upload.
-echo
-echo "TODO: upload /tmp/ceres-solver-$1.tar.gz"
-echo "TODO: upload /tmp/ceres-solver-$1.pdf"
-echo
+cat <<EOF 
+
+TODO:
+  - Upload /tmp/ceres-solver-$1.tar.gz
+
+  - Update the release string in scripts/ceres-solver.spec if this is a RC
+    release or the first release after a RC release.
+
+  - Build and upload RPM package.
+
+EOF

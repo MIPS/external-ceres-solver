@@ -59,13 +59,6 @@ class SchurEliminatorTest : public ::testing::Test {
     SetupHelper(problem.get());
   }
 
-  void SetUpFromFilename(const string& filename) {
-    scoped_ptr<LinearLeastSquaresProblem>
-        problem(CreateLinearLeastSquaresProblemFromFile(filename));
-    CHECK_NOTNULL(problem.get());
-    SetupHelper(problem.get());
-  }
-
   void SetupHelper(LinearLeastSquaresProblem* problem) {
     A.reset(down_cast<BlockSparseMatrix*>(problem->A.release()));
     b.reset(problem->b.release());
@@ -213,17 +206,6 @@ TEST_F(SchurEliminatorTest, ScalarProblem) {
   EliminateSolveAndCompare(VectorRef(D.get(), A->num_cols()), true, 1e-14);
   EliminateSolveAndCompare(VectorRef(D.get(), A->num_cols()), false, 1e-14);
 }
-
-#ifndef CERES_NO_PROTOCOL_BUFFERS
-TEST_F(SchurEliminatorTest, BlockProblem) {
-  const string input_file = TestFileAbsolutePath("problem-6-1384-000.lsqp");
-
-  SetUpFromFilename(input_file);
-  ComputeReferenceSolution(VectorRef(D.get(), A->num_cols()));
-  EliminateSolveAndCompare(VectorRef(D.get(), A->num_cols()), true, 1e-10);
-  EliminateSolveAndCompare(VectorRef(D.get(), A->num_cols()), false, 1e-10);
-}
-#endif  // CERES_NO_PROTOCOL_BUFFERS
 
 }  // namespace internal
 }  // namespace ceres
