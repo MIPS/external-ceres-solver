@@ -39,7 +39,7 @@ cd third_party/ceres
 declare -r temp_readme="/tmp/README.google"
 rm -f $temp_readme
 
-echo "URL: https://ceres-solver.googlesource.com/ceres-solver/+/$commit" >> $temp_readme
+echo "URL: https://ceres-solver.googlesource.com/ceres-solver/+archive/$commit.tar.gz" >> $temp_readme
 echo "Version: $commit" >> $temp_readme
 tail -n +3 README.google >> $temp_readme
 cp $temp_readme README.google

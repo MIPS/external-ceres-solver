@@ -1,5 +1,5 @@
 // Ceres Solver - A fast non-linear least squares minimizer
-// Copyright 2012 Google Inc. All rights reserved.
+// Copyright 2013 Google Inc. All rights reserved.
 // http://code.google.com/p/ceres-solver/
 //
 // Redistribution and use in source and binary forms, with or without
@@ -26,14 +26,53 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 //
-// Author: keir@google.com (Keir Mierle)
+// Author: sameeragarwal@google.com (Sameer Agarwal)
 
+#include "ceres/blas.h"
 #include "glog/logging.h"
 
-namespace google {
+extern "C" void dsyrk_(char* uplo,
+                       char* trans,
+                       int* n,
+                       int* k,
+                       double* alpha,
+                       double* a,
+                       int* lda,
+                       double* beta,
+                       double* c,
+                       int* ldc);
 
-// This is the set of log sinks. This must be in a separate library to ensure
-// that there is only one instance of this across the entire program.
-std::set<google::LogSink *> log_sinks_global;
+namespace ceres {
+namespace internal {
 
+void BLAS::SymmetricRankKUpdate(int num_rows,
+                                int num_cols,
+                                const double* a,
+                                bool transpose,
+                                double alpha,
+                                double beta,
+                                double* c) {
+#ifdef CERES_NO_LAPACK
+  LOG(FATAL) << "Ceres was built without a BLAS library.";
+#else
+  char uplo = 'L';
+  char trans = transpose ? 'T' : 'N';
+  int n = transpose ? num_cols : num_rows;
+  int k = transpose ? num_rows : num_cols;
+  int lda = k;
+  int ldc = n;
+  dsyrk_(&uplo,
+         &trans,
+         &n,
+         &k,
+         &alpha,
+         const_cast<double*>(a),
+         &lda,
+         &beta,
+         c,
+         &ldc);
+#endif
+}
+
+}  // namespace internal
 }  // namespace ceres
