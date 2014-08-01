@@ -56,7 +56,7 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := libceres
 
 LOCAL_SDK_VERSION := 17
-LOCAL_NDK_STL_VARIANT := stlport_static
+LOCAL_NDK_STL_VARIANT := c++_static
 
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/internal \
                     $(LOCAL_PATH)/internal/ceres \
