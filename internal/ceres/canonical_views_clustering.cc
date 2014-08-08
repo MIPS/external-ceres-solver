@@ -29,6 +29,9 @@
 // Author: David Gallup (dgallup@google.com)
 //         Sameer Agarwal (sameeragarwal@google.com)
 
+// This include must come before any #ifndef check on Ceres compile options.
+#include "ceres/internal/port.h"
+
 #ifndef CERES_NO_SUITESPARSE
 
 #include "ceres/canonical_views_clustering.h"
@@ -57,8 +60,8 @@ class CanonicalViewsClustering {
   // configuration of the clustering algorithm that some of the
   // vertices may not be assigned to any cluster. In this case they
   // are assigned to a cluster with id = kInvalidClusterId.
-  void ComputeClustering(const Graph<int>& graph,
-                         const CanonicalViewsClusteringOptions& options,
+  void ComputeClustering(const CanonicalViewsClusteringOptions& options,
+                         const Graph<int>& graph,
                          vector<int>* centers,
                          IntMap* membership);
 
@@ -81,21 +84,21 @@ class CanonicalViewsClustering {
 };
 
 void ComputeCanonicalViewsClustering(
-    const Graph<int>& graph,
     const CanonicalViewsClusteringOptions& options,
+    const Graph<int>& graph,
     vector<int>* centers,
     IntMap* membership) {
   time_t start_time = time(NULL);
   CanonicalViewsClustering cv;
-  cv.ComputeClustering(graph, options, centers, membership);
+  cv.ComputeClustering(options, graph, centers, membership);
   VLOG(2) << "Canonical views clustering time (secs): "
           << time(NULL) - start_time;
 }
 
 // Implementation of CanonicalViewsClustering
 void CanonicalViewsClustering::ComputeClustering(
-    const Graph<int>& graph,
     const CanonicalViewsClusteringOptions& options,
+    const Graph<int>& graph,
     vector<int>* centers,
     IntMap* membership) {
   options_ = options;

@@ -82,6 +82,9 @@ DEFINE_string(linear_solver, "sparse_schur", "Options are: "
 DEFINE_string(preconditioner, "jacobi", "Options are: "
               "identity, jacobi, schur_jacobi, cluster_jacobi, "
               "cluster_tridiagonal.");
+DEFINE_string(visibility_clustering, "canonical_views",
+              "single_linkage, canonical_views");
+
 DEFINE_string(sparse_linear_algebra_library, "suite_sparse",
               "Options are: suite_sparse and cx_sparse.");
 DEFINE_string(dense_linear_algebra_library, "eigen",
@@ -113,7 +116,6 @@ DEFINE_double(point_sigma, 0.0, "Standard deviation of the point "
 DEFINE_int32(random_seed, 38401, "Random seed used to set the state "
              "of the pseudo random number generator used to generate "
              "the pertubations.");
-DEFINE_string(solver_log, "", "File to record the solver execution to.");
 DEFINE_bool(line_search, false, "Use a line search instead of trust region "
             "algorithm.");
 
@@ -125,6 +127,8 @@ void SetLinearSolver(Solver::Options* options) {
                                  &options->linear_solver_type));
   CHECK(StringToPreconditionerType(FLAGS_preconditioner,
                                    &options->preconditioner_type));
+  CHECK(StringToVisibilityClusteringType(FLAGS_visibility_clustering,
+                                         &options->visibility_clustering_type));
   CHECK(StringToSparseLinearAlgebraLibraryType(
             FLAGS_sparse_linear_algebra_library,
             &options->sparse_linear_algebra_library_type));
@@ -146,19 +150,19 @@ void SetOrdering(BALProblem* bal_problem, Solver::Options* options) {
   if (options->use_inner_iterations) {
     if (FLAGS_blocks_for_inner_iterations == "cameras") {
       LOG(INFO) << "Camera blocks for inner iterations";
-      options->inner_iteration_ordering = new ParameterBlockOrdering;
+      options->inner_iteration_ordering.reset(new ParameterBlockOrdering);
       for (int i = 0; i < num_cameras; ++i) {
         options->inner_iteration_ordering->AddElementToGroup(cameras + camera_block_size * i, 0);
       }
     } else if (FLAGS_blocks_for_inner_iterations == "points") {
       LOG(INFO) << "Point blocks for inner iterations";
-      options->inner_iteration_ordering = new ParameterBlockOrdering;
+      options->inner_iteration_ordering.reset(new ParameterBlockOrdering);
       for (int i = 0; i < num_points; ++i) {
         options->inner_iteration_ordering->AddElementToGroup(points + point_block_size * i, 0);
       }
     } else if (FLAGS_blocks_for_inner_iterations == "cameras,points") {
       LOG(INFO) << "Camera followed by point blocks for inner iterations";
-      options->inner_iteration_ordering = new ParameterBlockOrdering;
+      options->inner_iteration_ordering.reset(new ParameterBlockOrdering);
       for (int i = 0; i < num_cameras; ++i) {
         options->inner_iteration_ordering->AddElementToGroup(cameras + camera_block_size * i, 0);
       }
@@ -167,7 +171,7 @@ void SetOrdering(BALProblem* bal_problem, Solver::Options* options) {
       }
     } else if (FLAGS_blocks_for_inner_iterations == "points,cameras") {
       LOG(INFO) << "Point followed by camera blocks for inner iterations";
-      options->inner_iteration_ordering = new ParameterBlockOrdering;
+      options->inner_iteration_ordering.reset(new ParameterBlockOrdering);
       for (int i = 0; i < num_cameras; ++i) {
         options->inner_iteration_ordering->AddElementToGroup(cameras + camera_block_size * i, 1);
       }
@@ -216,7 +220,7 @@ void SetOrdering(BALProblem* bal_problem, Solver::Options* options) {
     }
   }
 
-  options->linear_solver_ordering = ordering;
+  options->linear_solver_ordering.reset(ordering);
 }
 
 void SetMinimizerOptions(Solver::Options* options) {
@@ -258,18 +262,14 @@ void BuildProblem(BALProblem* bal_problem, Problem* problem) {
     CostFunction* cost_function;
     // Each Residual block takes a point and a camera as input and
     // outputs a 2 dimensional residual.
-    if (FLAGS_use_quaternions) {
-      cost_function = new AutoDiffCostFunction<
-          SnavelyReprojectionErrorWithQuaternions, 2, 4, 6, 3>(
-              new SnavelyReprojectionErrorWithQuaternions(
-                  observations[2 * i + 0],
-                  observations[2 * i + 1]));
-    } else {
-      cost_function =
-          new AutoDiffCostFunction<SnavelyReprojectionError, 2, 9, 3>(
-              new SnavelyReprojectionError(observations[2 * i + 0],
-                                           observations[2 * i + 1]));
-    }
+    cost_function =
+        (FLAGS_use_quaternions)
+        ? SnavelyReprojectionErrorWithQuaternions::Create(
+            observations[2 * i + 0],
+            observations[2 * i + 1])
+        : SnavelyReprojectionError::Create(
+            observations[2 * i + 0],
+            observations[2 * i + 1]);
 
     // If enabled use Huber's loss function.
     LossFunction* loss_function = FLAGS_robustify ? new HuberLoss(1.0) : NULL;
@@ -319,7 +319,6 @@ void SolveProblem(const char* filename) {
   BuildProblem(&bal_problem, &problem);
   Solver::Options options;
   SetSolverOptionsFromFlags(&bal_problem, &options);
-  options.solver_log = FLAGS_solver_log;
   options.gradient_tolerance = 1e-16;
   options.function_tolerance = 1e-16;
   Solver::Summary summary;

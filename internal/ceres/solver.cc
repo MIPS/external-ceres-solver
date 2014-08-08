@@ -1,5 +1,5 @@
 // Ceres Solver - A fast non-linear least squares minimizer
-// Copyright 2010, 2011, 2012 Google Inc. All rights reserved.
+// Copyright 2014 Google Inc. All rights reserved.
 // http://code.google.com/p/ceres-solver/
 //
 // Redistribution and use in source and binary forms, with or without
@@ -29,18 +29,256 @@
 // Author: keir@google.com (Keir Mierle)
 //         sameeragarwal@google.com (Sameer Agarwal)
 
+#include "ceres/internal/port.h"
 #include "ceres/solver.h"
 
+#include <sstream>   // NOLINT
 #include <vector>
+
 #include "ceres/problem.h"
 #include "ceres/problem_impl.h"
 #include "ceres/program.h"
 #include "ceres/solver_impl.h"
 #include "ceres/stringprintf.h"
+#include "ceres/types.h"
+#include "ceres/version.h"
 #include "ceres/wall_time.h"
 
 namespace ceres {
 namespace {
+
+#define OPTION_OP(x, y, OP)                                             \
+  if (!(options.x OP y)) {                                              \
+    std::stringstream ss;                                               \
+    ss << "Invalid configuration. ";                                    \
+    ss << string("Solver::Options::" #x " = ") << options.x << ". ";    \
+    ss << "Violated constraint: ";                                      \
+    ss << string("Solver::Options::" #x " " #OP " "#y);                 \
+    *error = ss.str();                                                  \
+    return false;                                                       \
+  }
+
+#define OPTION_OP_OPTION(x, y, OP)                                      \
+  if (!(options.x OP options.y)) {                                      \
+    std::stringstream ss;                                               \
+    ss << "Invalid configuration. ";                                    \
+    ss << string("Solver::Options::" #x " = ") << options.x << ". ";    \
+    ss << string("Solver::Options::" #y " = ") << options.y << ". ";    \
+    ss << "Violated constraint: ";                                      \
+    ss << string("Solver::Options::" #x );                              \
+    ss << string(#OP " Solver::Options::" #y ".");                      \
+    *error = ss.str();                                                  \
+    return false;                                                       \
+  }
+
+#define OPTION_GE(x, y) OPTION_OP(x, y, >=);
+#define OPTION_GT(x, y) OPTION_OP(x, y, >);
+#define OPTION_LE(x, y) OPTION_OP(x, y, <=);
+#define OPTION_LT(x, y) OPTION_OP(x, y, <);
+#define OPTION_LE_OPTION(x, y) OPTION_OP_OPTION(x ,y, <=)
+#define OPTION_LT_OPTION(x, y) OPTION_OP_OPTION(x ,y, <)
+
+bool CommonOptionsAreValid(const Solver::Options& options, string* error) {
+  OPTION_GE(max_num_iterations, 0);
+  OPTION_GE(max_solver_time_in_seconds, 0.0);
+  OPTION_GE(function_tolerance, 0.0);
+  OPTION_GE(gradient_tolerance, 0.0);
+  OPTION_GE(parameter_tolerance, 0.0);
+  OPTION_GT(num_threads, 0);
+  OPTION_GT(num_linear_solver_threads, 0);
+  if (options.check_gradients) {
+    OPTION_GT(gradient_check_relative_precision, 0.0);
+    OPTION_GT(numeric_derivative_relative_step_size, 0.0);
+  }
+  return true;
+}
+
+bool TrustRegionOptionsAreValid(const Solver::Options& options, string* error) {
+  OPTION_GT(initial_trust_region_radius, 0.0);
+  OPTION_GT(min_trust_region_radius, 0.0);
+  OPTION_GT(max_trust_region_radius, 0.0);
+  OPTION_LE_OPTION(min_trust_region_radius, max_trust_region_radius);
+  OPTION_LE_OPTION(min_trust_region_radius, initial_trust_region_radius);
+  OPTION_LE_OPTION(initial_trust_region_radius, max_trust_region_radius);
+  OPTION_GE(min_relative_decrease, 0.0);
+  OPTION_GE(min_lm_diagonal, 0.0);
+  OPTION_GE(max_lm_diagonal, 0.0);
+  OPTION_LE_OPTION(min_lm_diagonal, max_lm_diagonal);
+  OPTION_GE(max_num_consecutive_invalid_steps, 0);
+  OPTION_GT(eta, 0.0);
+  OPTION_GE(min_linear_solver_iterations, 1);
+  OPTION_GE(max_linear_solver_iterations, 1);
+  OPTION_LE_OPTION(min_linear_solver_iterations, max_linear_solver_iterations);
+
+  if (options.use_inner_iterations) {
+    OPTION_GE(inner_iteration_tolerance, 0.0);
+  }
+
+  if (options.use_nonmonotonic_steps) {
+    OPTION_GT(max_consecutive_nonmonotonic_steps, 0);
+  }
+
+  if (options.preconditioner_type == CLUSTER_JACOBI &&
+      options.sparse_linear_algebra_library_type != SUITE_SPARSE) {
+    *error =  "CLUSTER_JACOBI requires "
+        "Solver::Options::sparse_linear_algebra_library_type to be "
+        "SUITE_SPARSE";
+    return false;
+  }
+
+  if (options.preconditioner_type == CLUSTER_TRIDIAGONAL &&
+      options.sparse_linear_algebra_library_type != SUITE_SPARSE) {
+    *error =  "CLUSTER_TRIDIAGONAL requires "
+        "Solver::Options::sparse_linear_algebra_library_type to be "
+        "SUITE_SPARSE";
+    return false;
+  }
+
+#ifdef CERES_NO_LAPACK
+  if (options.dense_linear_algebra_library_type == LAPACK) {
+    if (options.linear_solver_type == DENSE_NORMAL_CHOLESKY) {
+      *error = "Can't use DENSE_NORMAL_CHOLESKY with LAPACK because "
+          "LAPACK was not enabled when Ceres was built.";
+      return false;
+    }
+
+    if (options.linear_solver_type == DENSE_QR) {
+      *error = "Can't use DENSE_QR with LAPACK because "
+          "LAPACK was not enabled when Ceres was built.";
+      return false;
+    }
+
+    if (options.linear_solver_type == DENSE_SCHUR) {
+      *error = "Can't use DENSE_SCHUR with LAPACK because "
+          "LAPACK was not enabled when Ceres was built.";
+      return false;
+    }
+  }
+#endif
+
+#ifdef CERES_NO_SUITESPARSE
+  if (options.sparse_linear_algebra_library_type == SUITE_SPARSE) {
+    if (options.linear_solver_type == SPARSE_NORMAL_CHOLESKY) {
+      *error = "Can't use SPARSE_NORMAL_CHOLESKY with SUITESPARSE because "
+             "SuiteSparse was not enabled when Ceres was built.";
+      return false;
+    }
+
+    if (options.linear_solver_type == SPARSE_SCHUR) {
+      *error = "Can't use SPARSE_SCHUR with SUITESPARSE because "
+          "SuiteSparse was not enabled when Ceres was built.";
+      return false;
+    }
+
+    if (options.preconditioner_type == CLUSTER_JACOBI) {
+      *error =  "CLUSTER_JACOBI preconditioner not supported. "
+          "SuiteSparse was not enabled when Ceres was built.";
+      return false;
+    }
+
+    if (options.preconditioner_type == CLUSTER_TRIDIAGONAL) {
+      *error =  "CLUSTER_TRIDIAGONAL preconditioner not supported. "
+          "SuiteSparse was not enabled when Ceres was built.";
+    return false;
+    }
+  }
+#endif
+
+#ifdef CERES_NO_CXSPARSE
+  if (options.sparse_linear_algebra_library_type == CX_SPARSE) {
+    if (options.linear_solver_type == SPARSE_NORMAL_CHOLESKY) {
+      *error = "Can't use SPARSE_NORMAL_CHOLESKY with CX_SPARSE because "
+             "CXSparse was not enabled when Ceres was built.";
+      return false;
+    }
+
+    if (options.linear_solver_type == SPARSE_SCHUR) {
+      *error = "Can't use SPARSE_SCHUR with CX_SPARSE because "
+          "CXSparse was not enabled when Ceres was built.";
+      return false;
+    }
+  }
+#endif
+
+  if (options.trust_region_strategy_type == DOGLEG) {
+    if (options.linear_solver_type == ITERATIVE_SCHUR ||
+        options.linear_solver_type == CGNR) {
+      *error = "DOGLEG only supports exact factorization based linear "
+          "solvers. If you want to use an iterative solver please "
+          "use LEVENBERG_MARQUARDT as the trust_region_strategy_type";
+      return false;
+    }
+  }
+
+  if (options.trust_region_minimizer_iterations_to_dump.size() > 0 &&
+      options.trust_region_problem_dump_format_type != CONSOLE &&
+      options.trust_region_problem_dump_directory.empty()) {
+    *error = "Solver::Options::trust_region_problem_dump_directory is empty.";
+    return false;
+  }
+
+  if (options.dynamic_sparsity &&
+      options.linear_solver_type != SPARSE_NORMAL_CHOLESKY) {
+    *error = "Dynamic sparsity is only supported with SPARSE_NORMAL_CHOLESKY.";
+    return false;
+  }
+
+  return true;
+}
+
+bool LineSearchOptionsAreValid(const Solver::Options& options, string* error) {
+  OPTION_GT(max_lbfgs_rank, 0);
+  OPTION_GT(min_line_search_step_size, 0.0);
+  OPTION_GT(max_line_search_step_contraction, 0.0);
+  OPTION_LT(max_line_search_step_contraction, 1.0);
+  OPTION_LT_OPTION(max_line_search_step_contraction,
+                   min_line_search_step_contraction);
+  OPTION_LE(min_line_search_step_contraction, 1.0);
+  OPTION_GT(max_num_line_search_step_size_iterations, 0);
+  OPTION_GT(line_search_sufficient_function_decrease, 0.0);
+  OPTION_LT_OPTION(line_search_sufficient_function_decrease,
+                   line_search_sufficient_curvature_decrease);
+  OPTION_LT(line_search_sufficient_curvature_decrease, 1.0);
+  OPTION_GT(max_line_search_step_expansion, 1.0);
+
+  if ((options.line_search_direction_type == ceres::BFGS ||
+       options.line_search_direction_type == ceres::LBFGS) &&
+      options.line_search_type != ceres::WOLFE) {
+
+    *error =
+        string("Invalid configuration: Solver::Options::line_search_type = ")
+        + string(LineSearchTypeToString(options.line_search_type))
+        + string(". When using (L)BFGS, "
+                 "Solver::Options::line_search_type must be set to WOLFE.");
+    return false;
+  }
+
+  // Warn user if they have requested BISECTION interpolation, but constraints
+  // on max/min step size change during line search prevent bisection scaling
+  // from occurring. Warn only, as this is likely a user mistake, but one which
+  // does not prevent us from continuing.
+  LOG_IF(WARNING,
+         (options.line_search_interpolation_type == ceres::BISECTION &&
+          (options.max_line_search_step_contraction > 0.5 ||
+           options.min_line_search_step_contraction < 0.5)))
+      << "Line search interpolation type is BISECTION, but specified "
+      << "max_line_search_step_contraction: "
+      << options.max_line_search_step_contraction << ", and "
+      << "min_line_search_step_contraction: "
+      << options.min_line_search_step_contraction
+      << ", prevent bisection (0.5) scaling, continuing with solve regardless.";
+
+  return true;
+}
+
+#undef OPTION_OP
+#undef OPTION_OP_OPTION
+#undef OPTION_GT
+#undef OPTION_GE
+#undef OPTION_LE
+#undef OPTION_LT
+#undef OPTION_LE_OPTION
+#undef OPTION_LT_OPTION
 
 void StringifyOrdering(const vector<int>& ordering, string* report) {
   if (ordering.size() == 0) {
@@ -54,11 +292,19 @@ void StringifyOrdering(const vector<int>& ordering, string* report) {
   internal::StringAppendF(report, "%d", ordering.back());
 }
 
-}  // namespace
+} // namespace
 
-Solver::Options::~Options() {
-  delete linear_solver_ordering;
-  delete inner_iteration_ordering;
+bool Solver::Options::IsValid(string* error) const {
+  if (!CommonOptionsAreValid(*this, error)) {
+    return false;
+  }
+
+  if (minimizer_type == TRUST_REGION) {
+    return TrustRegionOptionsAreValid(*this, error);
+  }
+
+  CHECK_EQ(minimizer_type, LINE_SEARCH);
+  return LineSearchOptionsAreValid(*this, error);
 }
 
 Solver::~Solver() {}
@@ -67,8 +313,16 @@ void Solver::Solve(const Solver::Options& options,
                    Problem* problem,
                    Solver::Summary* summary) {
   double start_time_seconds = internal::WallTimeInSeconds();
-  internal::ProblemImpl* problem_impl =
-      CHECK_NOTNULL(problem)->problem_impl_.get();
+  CHECK_NOTNULL(problem);
+  CHECK_NOTNULL(summary);
+
+  *summary = Summary();
+  if (!options.IsValid(&summary->message)) {
+    LOG(ERROR) << "Terminating: " << summary->message;
+    return;
+  }
+
+  internal::ProblemImpl* problem_impl = problem->problem_impl_.get();
   internal::SolverImpl::Solve(options, problem_impl, summary);
   summary->total_time_in_seconds =
       internal::WallTimeInSeconds() - start_time_seconds;
@@ -85,7 +339,8 @@ Solver::Summary::Summary()
     // Invalid values for most fields, to ensure that we are not
     // accidentally reporting default values.
     : minimizer_type(TRUST_REGION),
-      termination_type(DID_NOT_RUN),
+      termination_type(FAILURE),
+      message("ceres::Solve was not called."),
       initial_cost(-1.0),
       final_cost(-1.0),
       fixed_cost(-1.0),
@@ -119,75 +374,51 @@ Solver::Summary::Summary()
       inner_iterations_given(false),
       inner_iterations_used(false),
       preconditioner_type(IDENTITY),
+      visibility_clustering_type(CANONICAL_VIEWS),
       trust_region_strategy_type(LEVENBERG_MARQUARDT),
       dense_linear_algebra_library_type(EIGEN),
       sparse_linear_algebra_library_type(SUITE_SPARSE),
       line_search_direction_type(LBFGS),
-      line_search_type(ARMIJO) {
+      line_search_type(ARMIJO),
+      line_search_interpolation_type(BISECTION),
+      nonlinear_conjugate_gradient_type(FLETCHER_REEVES),
+      max_lbfgs_rank(-1) {
 }
-
-string Solver::Summary::BriefReport() const {
-  string report = "Ceres Solver Report: ";
-  if (termination_type == DID_NOT_RUN) {
-    CHECK(!error.empty())
-          << "Solver terminated with DID_NOT_RUN but the solver did not "
-          << "return a reason. This is a Ceres error. Please report this "
-          << "to the Ceres team";
-    return report + "Termination: DID_NOT_RUN, because " + error;
-  }
-
-  internal::StringAppendF(&report, "Iterations: %d",
-                          num_successful_steps + num_unsuccessful_steps);
-  internal::StringAppendF(&report, ", Initial cost: %e", initial_cost);
-
-  // If the solver failed or was aborted, then the final_cost has no
-  // meaning.
-  if (termination_type != NUMERICAL_FAILURE &&
-      termination_type != USER_ABORT) {
-    internal::StringAppendF(&report, ", Final cost: %e", final_cost);
-  }
-
-  internal::StringAppendF(&report, ", Termination: %s.",
-                          SolverTerminationTypeToString(termination_type));
-  return report;
-};
 
 using internal::StringAppendF;
 using internal::StringPrintf;
 
+string Solver::Summary::BriefReport() const {
+  return StringPrintf("Ceres Solver Report: "
+                      "Iterations: %d, "
+                      "Initial cost: %e, "
+                      "Final cost: %e, "
+                      "Termination: %s",
+                      num_successful_steps + num_unsuccessful_steps,
+                      initial_cost,
+                      final_cost,
+                      TerminationTypeToString(termination_type));
+};
+
 string Solver::Summary::FullReport() const {
   string report =
       "\n"
-      "Ceres Solver Report\n"
-      "-------------------\n";
+      "Ceres Solver v" CERES_VERSION_STRING " Solve Report\n"
+      "----------------------------------\n";
 
-  if (termination_type == DID_NOT_RUN) {
-    StringAppendF(&report, "                      Original\n");
-    StringAppendF(&report, "Parameter blocks    % 10d\n", num_parameter_blocks);
-    StringAppendF(&report, "Parameters          % 10d\n", num_parameters);
-    if (num_effective_parameters != num_parameters) {
-      StringAppendF(&report, "Effective parameters% 10d\n", num_parameters);
-    }
-
-    StringAppendF(&report, "Residual blocks     % 10d\n",
-                  num_residual_blocks);
-    StringAppendF(&report, "Residuals           % 10d\n\n",
-                  num_residuals);
-  } else {
-    StringAppendF(&report, "%45s    %21s\n", "Original", "Reduced");
-    StringAppendF(&report, "Parameter blocks    % 25d% 25d\n",
-                  num_parameter_blocks, num_parameter_blocks_reduced);
-    StringAppendF(&report, "Parameters          % 25d% 25d\n",
-                  num_parameters, num_parameters_reduced);
-    if (num_effective_parameters_reduced != num_parameters_reduced) {
-      StringAppendF(&report, "Effective parameters% 25d% 25d\n",
-                    num_effective_parameters, num_effective_parameters_reduced);
-    }
-    StringAppendF(&report, "Residual blocks     % 25d% 25d\n",
-                  num_residual_blocks, num_residual_blocks_reduced);
-    StringAppendF(&report, "Residual            % 25d% 25d\n",
-                  num_residuals, num_residuals_reduced);
+  StringAppendF(&report, "%45s    %21s\n", "Original", "Reduced");
+  StringAppendF(&report, "Parameter blocks    % 25d% 25d\n",
+                num_parameter_blocks, num_parameter_blocks_reduced);
+  StringAppendF(&report, "Parameters          % 25d% 25d\n",
+                num_parameters, num_parameters_reduced);
+  if (num_effective_parameters_reduced != num_parameters_reduced) {
+    StringAppendF(&report, "Effective parameters% 25d% 25d\n",
+                  num_effective_parameters, num_effective_parameters_reduced);
   }
+  StringAppendF(&report, "Residual blocks     % 25d% 25d\n",
+                num_residual_blocks, num_residual_blocks_reduced);
+  StringAppendF(&report, "Residual            % 25d% 25d\n",
+                num_residuals, num_residuals_reduced);
 
   if (minimizer_type == TRUST_REGION) {
     // TRUST_SEARCH HEADER
@@ -237,6 +468,14 @@ string Solver::Summary::FullReport() const {
                     PreconditionerTypeToString(preconditioner_type));
     }
 
+    if (preconditioner_type == CLUSTER_JACOBI ||
+        preconditioner_type == CLUSTER_TRIDIAGONAL) {
+      StringAppendF(&report, "Visibility clustering%24s%25s\n",
+                    VisibilityClusteringTypeToString(
+                        visibility_clustering_type),
+                    VisibilityClusteringTypeToString(
+                        visibility_clustering_type));
+    }
     StringAppendF(&report, "Threads             % 25d% 25d\n",
                   num_threads_given, num_threads_used);
     StringAppendF(&report, "Linear solver threads % 23d% 25d\n",
@@ -305,21 +544,10 @@ string Solver::Summary::FullReport() const {
                   num_threads_given, num_threads_used);
   }
 
-  if (termination_type == DID_NOT_RUN) {
-    CHECK(!error.empty())
-        << "Solver terminated with DID_NOT_RUN but the solver did not "
-        << "return a reason. This is a Ceres error. Please report this "
-        << "to the Ceres team";
-    StringAppendF(&report, "Termination:           %20s\n",
-                  "DID_NOT_RUN");
-    StringAppendF(&report, "Reason: %s\n", error.c_str());
-    return report;
-  }
-
   StringAppendF(&report, "\nCost:\n");
   StringAppendF(&report, "Initial        % 30e\n", initial_cost);
-  if (termination_type != NUMERICAL_FAILURE &&
-      termination_type != USER_ABORT) {
+  if (termination_type != FAILURE &&
+      termination_type != USER_FAILURE) {
     StringAppendF(&report, "Final          % 30e\n", final_cost);
     StringAppendF(&report, "Change         % 30e\n",
                   initial_cost - final_cost);
@@ -370,9 +598,15 @@ string Solver::Summary::FullReport() const {
   StringAppendF(&report, "Total               %25.3f\n\n",
                 total_time_in_seconds);
 
-  StringAppendF(&report, "Termination:        %25s\n",
-                SolverTerminationTypeToString(termination_type));
+  StringAppendF(&report, "Termination:        %25s (%s)\n",
+                TerminationTypeToString(termination_type), message.c_str());
   return report;
 };
+
+bool Solver::Summary::IsSolutionUsable() const {
+  return (termination_type == CONVERGENCE ||
+          termination_type == NO_CONVERGENCE ||
+          termination_type == USER_SUCCESS);
+}
 
 }  // namespace ceres
